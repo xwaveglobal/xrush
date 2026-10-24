@@ -1579,7 +1579,7 @@ export class Vehicle {
 
     // energy jets: only in the air (take-off → landing), stronger on rocket flights; steady, no flicker
     const jetK = this.spriteOn || this.meshOn ? Math.max(clamp01((p.air - 0.08) / 0.5), turbo > 0 ? clamp01(turbo * 2) : 0) : 0;
-    this.jetG.visible = jetK > 0.01 && !this.locked;
+    this.jetG.visible = jetK > 0.01 && !this.locked && RENDER.player !== 'ninja'; // flight jets: car only
     if (this.jetG.visible) {
       const len = (1.15 + p.engine * 0.6 + (p.isSuper ? 0.9 : 0) + (turbo > 0 && p.air < 0.4 ? 0.5 : 0)) * jetK;
       for (const j of this.jets) j.scale.set(0.8 + 0.4 * jetK, len, 1);

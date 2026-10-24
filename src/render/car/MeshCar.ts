@@ -291,7 +291,7 @@ export class MeshCar {
       this.orig.set(m, { color: m.color.getHex(), emissive: m.emissive.getHex(), ei: m.emissiveIntensity });
       this.fadeState.push({ m, transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite });
     }
-    for (const so of n.sockets) this.addThrust(so);
+    for (const so of n.sockets) this.sockets.push(so); // trail anchors only: no nitro flames on the character (car-only look)
     this.root.add(n.root);
     n.root.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(n.root);

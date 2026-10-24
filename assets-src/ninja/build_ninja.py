@@ -9,7 +9,7 @@
 # exports the GLB the game loads (src/assets/models/ninja.glb).
 #
 # Units: metres, Blender axes (Z up, the character faces -Y, its left hand is on +X). The model is
-# ~1.02 m tall here; the game scales it (RENDER.ninja in src/config.ts). Feet rest on z = 0.
+# ~1.0 m tall here; the game scales it (RENDER.ninja in src/config.ts). Feet rest on z = 0.
 import bpy, bmesh, math, os, sys, random
 import numpy as np
 from mathutils import Vector, Matrix, Euler
@@ -64,7 +64,7 @@ def make_image(name, rgb, non_color=False):
         img.colorspace_settings.name = 'Non-Color'
     return img
 
-def fabric_textures(n=512, threads=32):
+def fabric_textures(n=512, threads=40):
     y, x = np.mgrid[0:n, 0:n] / n * threads
     i, j = np.floor(x).astype(int), np.floor(y).astype(int)
     fu, fv = x - i, y - j
@@ -74,10 +74,12 @@ def fabric_textures(n=512, threads=32):
     h = np.where(warp_top, warp, weft * 0.85)
     fib = periodic_noise(n, 90, 3)
     low = periodic_noise(n, 6, 4)
-    h2 = h + 0.08 * fib
-    alb = 0.86 + 0.08 * h + 0.04 * low + 0.015 * fib
-    nrm = height_to_normal(h2, 2.2)
-    rough = 0.80 + 0.08 * (1 - h) + 0.04 * low
+    sw = periodic_noise(n, 6, 5)                       # embossed swirl / damask-like pattern:
+    lines = np.exp(-np.sin(sw * 4.2) ** 2 / 0.05)      # contour lines of a smooth noise
+    h2 = 0.45 * h + 0.55 * lines + 0.08 * fib
+    alb = 0.84 + 0.05 * h + 0.05 * lines + 0.04 * low + 0.015 * fib
+    nrm = height_to_normal(h2, 2.4)
+    rough = 0.80 + 0.06 * (1 - h) - 0.07 * lines + 0.04 * low
     ao = 0.82 + 0.18 * h
     orm = np.stack([ao, rough, np.zeros_like(h)], -1)
     return (make_image('T_Fabric_BaseColor', np.repeat(alb[..., None], 3, -1)),
@@ -123,7 +125,7 @@ def strap_textures(w=256, hgt=64, stitch_rows=(0.2, 0.8), dash=16):
 
 def sole_textures(n=128):
     y, x = np.mgrid[0:n, 0:n] / n
-    h = (np.sin(y * np.pi * 2 * 8) > 0.2).astype(float)  # tread bars
+    h = (np.sin(y * np.pi * 2 * 4) > 0.2).astype(float)  # tread bars
     h = h * 0.8 + 0.2 * (np.abs(periodic_noise(n, 20, 31)) < 0.4)
     nrm = height_to_normal(h, 2.5)
     return make_image('T_Sole_Normal', nrm, True)
@@ -181,15 +183,18 @@ lea_a, lea_n, lea_o = TEX['lea']
 st_a, st_n, st_o = TEX['strap']
 se_a, se_n, se_o = TEX['seam']
 # colours are albedo (sRGB) without the references' blue / orange lighting
-make_mat('Ninja_Cloth', (0.175, 0.168, 0.172), tex=fab_a, normal=fab_n, orm=fab_o, nstr=0.7)
-make_mat('Ninja_ClothDark', (0.115, 0.108, 0.11), tex=fab_a, normal=fab_n, orm=fab_o, nstr=0.7)
-make_mat('Ninja_Seam', (0.15, 0.14, 0.14), tex=se_a, normal=se_n, orm=se_o, nstr=0.8)
-make_mat('Ninja_LeatherBrown', (0.20, 0.135, 0.095), tex=lea_a, normal=lea_n, orm=lea_o, nstr=0.6)
-make_mat('Ninja_LeatherBlack', (0.105, 0.098, 0.098), tex=lea_a, normal=lea_n, orm=lea_o, nstr=0.6)
-make_mat('Ninja_Strap', (0.19, 0.13, 0.09), tex=st_a, normal=st_n, orm=st_o, nstr=0.8)
-make_mat('Ninja_Sole', (0.23, 0.16, 0.115), rough=0.85, normal=TEX['sole_n'], nstr=0.8)
-make_mat('Ninja_Skin', (0.96, 0.64, 0.43), rough=0.55)
-make_mat('Ninja_Mask', (0.06, 0.058, 0.065), rough=0.42)
+make_mat('Ninja_Cloth', (0.178, 0.157, 0.16), tex=fab_a, normal=fab_n, orm=fab_o, nstr=0.8)
+make_mat('Ninja_ClothDark', (0.148, 0.13, 0.133), tex=fab_a, normal=fab_n, orm=fab_o, nstr=0.8)
+make_mat('Ninja_Seam', (0.15, 0.135, 0.135), tex=se_a, normal=se_n, orm=se_o, nstr=0.8)
+make_mat('Ninja_Scuff', (0.21, 0.195, 0.195), rough=0.92)
+make_mat('Ninja_LeatherBrown', (0.27, 0.19, 0.14), tex=lea_a, normal=lea_n, orm=lea_o, nstr=0.6)
+make_mat('Ninja_LeatherBlack', (0.125, 0.112, 0.112), tex=lea_a, normal=lea_n, orm=lea_o, nstr=0.6)
+make_mat('Ninja_Strap', (0.27, 0.19, 0.14), tex=st_a, normal=st_n, orm=st_o, nstr=0.8)
+make_mat('Ninja_Sole', (0.15, 0.115, 0.1), rough=0.8, normal=TEX['sole_n'], nstr=0.6)
+make_mat('Ninja_Skin', (0.98, 0.63, 0.43), rough=0.55)
+make_mat('Ninja_Mask', (0.085, 0.08, 0.085), rough=0.48)
+make_mat('Ninja_PropRubber', (0.2, 0.155, 0.14), rough=0.62)
+make_mat('Ninja_PropMark', (0.8, 0.76, 0.72), rough=0.6)
 make_mat('Ninja_EyeWhite', (0.96, 0.96, 0.94), rough=0.25)
 make_mat('Ninja_Pupil', (0.015, 0.015, 0.02), rough=0.18)
 make_mat('Ninja_Mouth', (0.33, 0.11, 0.09), rough=0.6)
@@ -391,23 +396,28 @@ def frame_rect(p, c, X, Y, N, w, h, bar, depth, mat):
         p.face([ib[k2], ib[k], inf[k], inf[k2]], uv, mat, False)
 
 # ----------------------------------------------------------------------------------------------
-# proportions (chibi: big head, short limbs). x = character's left, -y = front, z = up
+# proportions (chibi, ~2.1 heads: hood + head are about half the height). x = character's left,
+# -y = front, z = up
 # ----------------------------------------------------------------------------------------------
-HEAD_C = Vector((0, 0, 0.77)); HEAD_R = Vector((0.185, 0.172, 0.185))
+HEAD_C = Vector((0, 0, 0.712)); HEAD_R = Vector((0.19, 0.176, 0.182))
 ARM_ANG = math.radians(40)          # A-pose: arms 40 deg below horizontal
-SH = {s: Vector((0.125 * s, 0.0, 0.545)) for s in (1, -1)}
+SH = {s: Vector((0.118 * s, 0.0, 0.462)) for s in (1, -1)}
 def arm_dir(s):
     return Vector((math.cos(ARM_ANG) * s, 0.0, -math.sin(ARM_ANG)))
-ELB = {s: SH[s] + arm_dir(s) * 0.115 for s in (1, -1)}
-WRI = {s: ELB[s] + arm_dir(s) * 0.10 for s in (1, -1)}
-HTIP = {s: WRI[s] + arm_dir(s) * 0.07 for s in (1, -1)}
-HIPJ = {s: Vector((0.07 * s, 0.0, 0.335)) for s in (1, -1)}
-KNEE = {s: Vector((0.076 * s, -0.005, 0.222)) for s in (1, -1)}
-ANK = {s: Vector((0.078 * s, 0.0, 0.12)) for s in (1, -1)}
-TOE = {s: Vector((0.08 * s, -0.10, 0.03)) for s in (1, -1)}
+ELB = {s: SH[s] + arm_dir(s) * 0.095 for s in (1, -1)}
+WRI = {s: ELB[s] + arm_dir(s) * 0.082 for s in (1, -1)}
+HTIP = {s: WRI[s] + arm_dir(s) * 0.066 for s in (1, -1)}
+HIPJ = {s: Vector((0.064 * s, 0.0, 0.272)) for s in (1, -1)}
+KNEE = {s: Vector((0.068 * s, -0.005, 0.178)) for s in (1, -1)}
+ANK = {s: Vector((0.07 * s, 0.0, 0.098)) for s in (1, -1)}
+TOE = {s: Vector((0.072 * s, -0.105, 0.03)) for s in (1, -1)}
 
 def lerp(a, b, t):
     return a + (b - a) * t
+
+def smooth01(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
 
 def head_surface(direction, off=0.0):
     """point on the head ellipsoid along a direction from HEAD_C"""
@@ -419,29 +429,77 @@ def face_dir(u, v):
     """u: horizontal angle (rad, + = character's left), v: vertical angle (rad, + = up), 0,0 = straight ahead (-y)"""
     return Vector((math.sin(u) * math.cos(v), -math.cos(u) * math.cos(v), math.sin(v)))
 
+def grid_surface(p, G, mat, wrap=False, density=8.0, skip=None, smooth=True):
+    """G[r][c] points (rows run top -> bottom); quads between neighbours; wrap closes the columns.
+    UVs follow arc length so the fabric texture keeps its scale."""
+    bm = p.bm
+    R, C = len(G), len(G[0])
+    G = [[Vector(q) for q in row] for row in G]
+    V = [[bm.verts.new(q) for q in row] for row in G]
+    us = []
+    for row in G:
+        acc = [0.0]
+        for c in range(1, C + (1 if wrap else 0)):
+            acc.append(acc[-1] + (row[c % C] - row[c - 1]).length)
+        us.append(acc)
+    vs = [[0.0] * C]
+    for r in range(1, R):
+        vs.append([vs[-1][c] + (G[r][c] - G[r - 1][c]).length for c in range(C)])
+    for r in range(R - 1):
+        for c in range(C - (0 if wrap else 1)):
+            c2 = (c + 1) % C
+            if skip and (r, c) in skip:
+                continue
+            uv = [(us[r][c] * density, -vs[r][c] * density), (us[r + 1][c] * density, -vs[r + 1][c] * density),
+                  (us[r + 1][c + 1] * density, -vs[r + 1][c2] * density), (us[r][c + 1] * density, -vs[r][c2] * density)]
+            p.face([V[r][c], V[r + 1][c], V[r + 1][c2], V[r][c2]], uv, mat, smooth)
+    return V
+
+def cut_and_snap(params, holes, metric):
+    """params[r][c] = (a, b) surface coordinates. holes: list of (a0, b0, ra, rb) ellipses in metric
+    space. Faces whose centre falls inside a hole are skipped; the remaining vertices that lie inside
+    are pushed onto the ellipse, so the holes / openings get smooth round outlines."""
+    R, C = len(params), len(params[0])
+    def rho(a, b, h):
+        x, y = metric(a, b, h)
+        return math.hypot(x, y)
+    skip = set()
+    for r in range(R - 1):
+        for c in range(C - 1):
+            a = sum(params[r + i][c + j][0] for i in (0, 1) for j in (0, 1)) / 4
+            b = sum(params[r + i][c + j][1] for i in (0, 1) for j in (0, 1)) / 4
+            if any(rho(a, b, h) < 1.0 for h in holes):
+                skip.add((r, c))
+    out = [list(row) for row in params]
+    for r in range(R):
+        for c in range(C):
+            a, b = params[r][c]
+            for h in holes:
+                k = rho(a, b, h)
+                if 1e-6 < k < 1.0:
+                    a0, b0 = h[0], h[1]
+                    a, b = a0 + (a - a0) / k, b0 + (b - b0) / k
+            out[r][c] = (a, b)
+    return out, skip
+
 # ---------------- Body: torso, arms, legs (the dark jumpsuit) ----------------
 P = part('Ninja_Body')
-torso = [(0.30, 0.10, 0.082), (0.335, 0.108, 0.088), (0.39, 0.112, 0.088), (0.45, 0.12, 0.092),
-         (0.51, 0.128, 0.095), (0.545, 0.118, 0.09), (0.57, 0.085, 0.07), (0.595, 0.055, 0.05), (0.64, 0.05, 0.047)]
+torso = [(0.235, 0.098, 0.084), (0.265, 0.108, 0.092), (0.31, 0.114, 0.096), (0.36, 0.118, 0.098),
+         (0.41, 0.122, 0.1), (0.445, 0.116, 0.095), (0.47, 0.088, 0.074), (0.495, 0.056, 0.05), (0.545, 0.05, 0.047)]
 rings = [ellipse_ring((0, 0, z), (1, 0, 0), (0, 1, 0), rx, ry, 24) for z, rx, ry in torso]
-loft(P, rings, 'Ninja_Cloth', 'pole', 'pole', pole0=(0, 0, 0.285), pole1=(0, 0, 0.65))
+loft(P, rings, 'Ninja_Cloth', 'pole', 'pole', pole0=(0, 0, 0.222), pole1=(0, 0, 0.555))
 for s in (1, -1):
     sh_in = SH[s] - Vector((0.03 * s, 0, -0.005))
     pts = [sh_in, lerp(SH[s], ELB[s], 0.35), ELB[s], lerp(ELB[s], WRI[s], 0.5), WRI[s]]
-    tube(P, pts, [0.042, 0.04, 0.035, 0.033, 0.03], 'Ninja_Cloth', ns=12, hint=(0, -1, 0))
+    tube(P, pts, [0.045, 0.043, 0.039, 0.036, 0.033], 'Ninja_Cloth', ns=12, hint=(0, -1, 0))
     pts = [HIPJ[s] + Vector((0, 0, 0.03)), HIPJ[s], lerp(HIPJ[s], KNEE[s], 0.5), KNEE[s], lerp(KNEE[s], ANK[s], 0.5), ANK[s]]
-    tube(P, pts, [0.055, 0.058, 0.056, 0.05, 0.045, 0.04], 'Ninja_Cloth', ns=14, hint=(0, -1, 0))
+    tube(P, pts, [0.058, 0.061, 0.059, 0.054, 0.05, 0.046], 'Ninja_Cloth', ns=14, hint=(0, -1, 0))
 
-# ---------------- Face: skin opening + dark under-mask, nose, mouth ----------------
+# ---------------- Face: black mask over the upper face, peach skin only around nose + mouth ----------------
 P = part('Ninja_Face')
-OPEN_U, OPEN_V0, OPEN_V1 = math.radians(64), math.radians(-30), math.radians(40)
-def in_opening(d, margin=0.0):
-    u = math.atan2(d.x, -d.y)
-    v = math.asin(max(-1, min(1, d.z)))
-    vc = (OPEN_V0 + OPEN_V1) / 2; vr = (OPEN_V1 - OPEN_V0) / 2
-    return (u / (OPEN_U + margin)) ** 2 + ((v - vc) / (vr + margin)) ** 2 < 1.0
+NS_H, NZ_H = 40, 24
+SKIN_V, SKIN_U = math.radians(-15.0), math.radians(40)
 face_rings = []
-NS_H, NZ_H = 40, 22
 for i in range(1, NZ_H):
     th = math.pi * i / NZ_H
     ring = []
@@ -450,23 +508,23 @@ for i in range(1, NZ_H):
         d = Vector((math.sin(th) * math.cos(ph), math.sin(th) * math.sin(ph), -math.cos(th)))
         ring.append(head_surface(d))
     face_rings.append(ring)
-V = loft(P, face_rings, 'Ninja_Mask', 'pole', 'pole', pole0=HEAD_C - Vector((0, 0, HEAD_R.z)), pole1=HEAD_C + Vector((0, 0, HEAD_R.z)))
+loft(P, face_rings, 'Ninja_Mask', 'pole', 'pole', pole0=HEAD_C - Vector((0, 0, HEAD_R.z)), pole1=HEAD_C + Vector((0, 0, HEAD_R.z)))
 for f in P.bm.faces:
-    c = f.calc_center_median() - HEAD_C
-    if in_opening(c.normalized(), margin=0.06):
+    d = (f.calc_center_median() - HEAD_C).normalized()
+    u = math.atan2(d.x, -d.y); v = math.asin(max(-1, min(1, d.z)))
+    if v < SKIN_V and abs(u) < SKIN_U and v > math.radians(-62):
         f.material_index = P.mi('Ninja_Skin')
-# nose: a soft bump; mouth: small flattened dark ellipsoid with a slight frown
-nose = head_surface(face_dir(0, math.radians(-6)), -0.006)
-ellipsoid(P, nose, (0.016, 0.014, 0.013), 'Ninja_Skin', ns=12, nz=8)
-if True:
-    mc = head_surface(face_dir(0, math.radians(-21)), -0.002)
-    ellipsoid(P, mc, (0.026, 0.008, 0.0075), 'Ninja_Mouth', ns=14, nz=6,
-              axes=((1, 0, 0), (0, 1, 0.25), (0, -0.25, 1)))
-# cheeks: subtle volume
+# round nose poking out under the mask edge, soft cheeks, a small crooked mouth
+ellipsoid(P, head_surface(face_dir(0, math.radians(-11)), -0.004), (0.024, 0.02, 0.019), 'Ninja_Skin', ns=14, nz=9)
 for s in (1, -1):
-    ellipsoid(P, head_surface(face_dir(s * math.radians(32), math.radians(-15)), -0.02), (0.04, 0.03, 0.03), 'Ninja_Skin', ns=12, nz=8)
+    ellipsoid(P, head_surface(face_dir(s * math.radians(24), math.radians(-21)), -0.02), (0.032, 0.024, 0.024), 'Ninja_Skin', ns=10, nz=7)
+mouth = []
+for k in range(9):
+    t = k / 8 * 2 - 1
+    mouth.append(head_surface(face_dir(math.radians(15) * t, math.radians(-25 + 3.0 * t * t - 2.2 * t + 1.1 * math.sin(t * 3.1))), 0.0005))
+tube(P, mouth, [0.0026, 0.0032, 0.0036, 0.0038, 0.0038, 0.0036, 0.0033, 0.003, 0.0024], 'Ninja_Mouth', ns=6, hint=(0, -1, 0))
 
-# ---------------- Eyes: whites with an angry slanted lid, pupils, highlights ----------------
+# ---------------- Eyes: big whites with an angry slanted lid, big pupils, highlights, heavy brows ----------------
 P = part('Ninja_Eyes')
 def surface_disc(p, outline_uv, centre_uv, off, mat, thick=0.003):
     """outline in face angles (u, v) -> fan polygon lying on the head surface (+thickness)"""
@@ -483,128 +541,177 @@ def surface_disc(p, outline_uv, centre_uv, off, mat, thick=0.003):
         p.face([bot[k2], bot[k], cb], uv, mat)
         p.face([bot[k], bot[k2], top[k2], top[k]], uv[:2] + [uv[1], uv[0]], mat)
 for s in (1, -1):
-    cu, cv = s * math.radians(21), math.radians(3)
-    ru, rv = math.radians(13), math.radians(9.5)
-    pts = []
-    for k in range(28):
-        a = 2 * math.pi * k / 28
-        u, v = cu + ru * math.cos(a), cv + rv * math.sin(a)
+    cu, cvv = s * math.radians(23), math.radians(7.5)
+    ru, rv = math.radians(17), math.radians(12)
+    def lid(u):
         # angry lid: the upper edge slants down toward the nose
-        lid = cv + rv * 0.55 - (1 - (u - cu) / ru * s) * rv * 0.5
-        v = min(v, lid)
-        pts.append((u, v))
-    surface_disc(P, pts, (cu, cv - rv * 0.2), 0.0015, 'Ninja_EyeWhite')
-    pu, pv = cu - s * math.radians(3.5), cv - math.radians(1.5)
-    pr = math.radians(5.2)
+        return cvv + rv * 0.62 - (1 - (u - cu) / ru * s) * rv * 0.55
+    pts = []
+    for k in range(32):
+        a = 2 * math.pi * k / 32
+        u, v = cu + ru * math.cos(a), cvv + rv * math.sin(a)
+        pts.append((u, min(v, lid(u))))
+    surface_disc(P, pts, (cu, cvv - rv * 0.2), 0.0015, 'Ninja_EyeWhite')
+    pu, pv = cu - s * math.radians(4.5), cvv - math.radians(2.0)
+    pr = math.radians(7.2)
     ppts = []
-    for k in range(20):
-        a = 2 * math.pi * k / 20
-        u, v = pu + pr * math.cos(a), pv + pr * 1.12 * math.sin(a)
-        lid = cv + rv * 0.55 - (1 - (u - cu) / ru * s) * rv * 0.5 - math.radians(0.6)
-        ppts.append((u, min(v, lid)))
+    for k in range(22):
+        a = 2 * math.pi * k / 22
+        u, v = pu + pr * math.cos(a), pv + pr * 1.1 * math.sin(a)
+        u = max(cu - ru * 0.92, min(cu + ru * 0.92, u))
+        ppts.append((u, max(cvv - rv * 0.9, min(v, lid(u) - math.radians(0.6)))))
     surface_disc(P, ppts, (pu, pv), 0.0045, 'Ninja_Pupil', 0.002)
-    hu, hv, hr = pu + s * math.radians(1.6), pv + math.radians(1.8), math.radians(1.5)
-    surface_disc(P, [(hu + hr * math.cos(2 * math.pi * k / 10), hv + hr * math.sin(2 * math.pi * k / 10)) for k in range(10)],
-                 (hu, hv), 0.0068, 'Ninja_EyeWhite', 0.0015)
-    # dark brow ridge over the slanted lid (part of the hood/mask look)
+    hu, hv_, hr = pu + s * math.radians(2.0), pv + math.radians(2.2), math.radians(1.9)
+    surface_disc(P, [(hu + hr * math.cos(2 * math.pi * k / 10), hv_ + hr * math.sin(2 * math.pi * k / 10)) for k in range(10)],
+                 (hu, hv_), 0.0068, 'Ninja_EyeWhite', 0.0015)
+    # thick angry brow over the slanted lid
     bpts = []
-    for k in range(9):
-        u = cu - ru * 1.05 + 2.1 * ru * k / 8
-        lid = cv + rv * 0.55 - (1 - (u - cu) / ru * s) * rv * 0.5
-        bpts.append(head_surface(face_dir(u, lid + math.radians(2.2)), 0.002))
-    nrm = [(q - HEAD_C).normalized() for q in bpts]
-    ribbon(P, bpts, nrm, 0.011, 0.004, 'Ninja_Mask')
+    for k in range(11):
+        u = cu - ru * 1.12 + 2.24 * ru * k / 10
+        bpts.append(head_surface(face_dir(u, lid(u) + math.radians(3.2)), 0.003))
+    tube(P, bpts, [0.006, 0.008, 0.0095, 0.0105, 0.011, 0.011, 0.0105, 0.0095, 0.008, 0.0065, 0.005], 'Ninja_Pupil',
+         ns=8, hint=(0, 0, 1), radii_b=[0.003, 0.004, 0.0045, 0.005, 0.005, 0.005, 0.005, 0.0045, 0.004, 0.0035, 0.003])
 
-# ---------------- Hood (with face opening, back peak, centre seam) ----------------
+# ---------------- Hood: big soft dome, tip folding back, flat stitched centre seam, flared hem ----------------
 P = part('Ninja_Hood')
-hood_prof = [(0.565, 0.165, 0.135), (0.598, 0.14, 0.118), (0.63, 0.152, 0.138), (0.66, 0.182, 0.168), (0.70, 0.2, 0.188),
-             (0.74, 0.208, 0.196), (0.78, 0.21, 0.198), (0.82, 0.206, 0.194), (0.86, 0.192, 0.182), (0.895, 0.168, 0.16),
-             (0.925, 0.134, 0.13), (0.948, 0.095, 0.094), (0.962, 0.058, 0.058), (0.97, 0.025, 0.025)]
-NSEG = 48
-def hood_pt(z, rx, ry, ph):
-    q = Vector((rx * math.sin(ph), -ry * math.cos(ph), z))
-    w = max(0.0, (z - 0.80) / 0.17) * max(0.0, -math.cos(ph))  # back peak
-    q.y += 0.06 * w * w
-    q.z += 0.035 * w * w
-    return q
-hv = [[P.bm.verts.new(hood_pt(z, rx, ry, 2 * math.pi * k / NSEG)) for k in range(NSEG)] for z, rx, ry in hood_prof]
-top = P.bm.verts.new(hood_pt(0.975, 0.0, 0.0, math.pi))
-top.co = hood_pt(0.975, 0.004, 0.004, math.pi)
-def opening(q):
-    d = (q - HEAD_C)
-    return in_opening(d.normalized(), margin=0.0) and q.z > 0.645
-for i in range(len(hv) - 1):
-    for k in range(NSEG):
-        k2 = (k + 1) % NSEG
-        quad = [hv[i][k], hv[i][k2], hv[i + 1][k2], hv[i + 1][k]]
-        c = sum((v.co for v in quad), Vector()) / 4
-        if opening(c):
-            continue
-        P.face(quad, [(k / NSEG * 6, i / 13 * 4), ((k + 1) / NSEG * 6, i / 13 * 4), ((k + 1) / NSEG * 6, (i + 1) / 13 * 4), (k / NSEG * 6, (i + 1) / 13 * 4)], 'Ninja_Cloth')
-for k in range(NSEG):
-    k2 = (k + 1) % NSEG
-    P.face([hv[-1][k], hv[-1][k2], top], [(k / NSEG * 6, 4), ((k + 1) / NSEG * 6, 4), (k / NSEG * 6, 4.1)], 'Ninja_Cloth')
-# rolled rim around the face opening
+HOOD_C = Vector((0, 0.03, 0.718)); HR = (0.262, 0.252, 0.226)
+TIP = Vector((0, 0.6, 0.8)).normalized()
+# soft creases on the cloth: (ph0, th0, ph1, th1) in degrees, depth (m, - = dent), width (deg)
+CREASES = [(150, 150, 120, 95, -0.007, 9), (205, 155, 228, 100, -0.006, 8), (180, 120, 160, 70, 0.006, 10),
+           (60, 140, 85, 95, -0.006, 9), (300, 140, 275, 96, -0.006, 9), (110, 75, 140, 45, 0.007, 9), (250, 75, 220, 45, 0.007, 9)]
+def crease(th, ph):
+    out = 0.0
+    for p0, t0, p1, t1, amp, wd in CREASES:
+        a = Vector((p0, t0)); b = Vector((p1, t1)); x = Vector((math.degrees(ph) % 360, math.degrees(th)))
+        ab = b - a
+        t = max(0.0, min(1.0, (x - a).dot(ab) / ab.length_squared))
+        d = (x - (a + ab * t)).length
+        out += 1.8 * amp * math.exp(-(d / wd) ** 2) * math.sin(math.pi * (0.15 + 0.7 * t))
+    return out
+TH0 = math.radians(50)               # hem (polar angle from the bottom)
+NSEG, NLAT = 40, 18
+def hood_pt(th, ph, off=0.0):
+    """th: polar angle from the bottom (TH0 = hem, pi = top), ph: around (0 = front, + = character's left)"""
+    # gumdrop profile: a dome on top, then the cloth keeps widening down to the hem (drapes over the shoulders)
+    lowk = max(0.0, (math.radians(90) - th) / (math.radians(90) - TH0))
+    rho = math.sin(th) if th >= math.radians(90) else 1 - 0.03 * lowk - 0.05 * lowk ** 4
+    ry = HR[1] - 0.016 * math.cos(ph)            # roomier at the back
+    tp = smooth01((th - math.radians(95)) / math.radians(75))   # narrower toward the top: soft gumdrop / onion dome
+    q = HOOD_C + Vector((HR[0] * rho * math.sin(ph) * (1 - 0.2 * tp), -ry * rho * math.cos(ph) * (1 - 0.1 * tp),
+                         -HR[2] * math.cos(th)))
+    d = (q - HOOD_C).normalized()
+    w = max(0.0, (d.dot(TIP) - 0.74) / 0.26)
+    q = q + TIP * (0.06 * w * w)
+    q.y += 0.045 * w ** 3
+    q.z -= 0.03 * w ** 4
+    hemw = max(0.0, 1 - (th - TH0) / math.radians(14))
+    q.z += hemw * (0.012 * math.sin(3 * ph + 1.0) + 0.006 * math.sin(7 * ph))
+    n = (q - HOOD_C).normalized()
+    lo = max(0.0, (math.radians(95) - th) / (math.radians(95) - TH0))
+    s = min(1.0, math.sin(th) * 3)
+    wr = s * (0.0075 * math.sin(3 * ph + 2 * th) + 0.0055 * math.sin(5 * ph - 3 * th + 1.0)
+              + 0.0035 * math.sin(8 * ph + 5 * th + 2.0)) + 0.011 * lo ** 1.5 * math.sin(9 * ph + 0.4)
+    return q + n * (wr + crease(th, ph) * s + off)
+# face opening: ellipse in (ph, th) around the front, it runs out through the hem
+OPEN = (0.0, math.radians(73), math.radians(50), math.radians(39))
+def hood_metric(ph, th, h):
+    return ((ph - h[0]) / h[2], (th - h[1]) / h[3])
+params = []
+for i in range(NLAT):
+    th = math.pi - (math.pi - TH0) * (i + 1) / NLAT
+    params.append([(-math.pi + 2 * math.pi * c / NSEG, th) for c in range(NSEG + 1)])
+params, skip = cut_and_snap(params, [OPEN], hood_metric)
+G = [[hood_pt(th, ph) for ph, th in row] for row in params]
+V = grid_surface(P, G, 'Ninja_Cloth', skip=skip)
+# merge the duplicated back column (ph = -pi and +pi) and close the top with a pole
+bmesh.ops.remove_doubles(P.bm, verts=[V[r][0] for r in range(NLAT)] + [V[r][NSEG] for r in range(NLAT)], dist=1e-5)
+pole = P.bm.verts.new(hood_pt(math.pi, 0.0))
+row0 = [V[0][k] if V[0][k].is_valid else V[0][NSEG] for k in range(NSEG)]
+for k in range(len(row0)):
+    P.face([row0[(k + 1) % len(row0)], row0[k], pole], [(k * 0.1, 0), ((k + 1) * 0.1, 0), (k * 0.1, 0.05)], 'Ninja_Cloth')
+# rolled rim around the face opening (open curve: both ends tuck under the cowl)
 rim = []
-vc = (OPEN_V0 + OPEN_V1) / 2; vr = (OPEN_V1 - OPEN_V0) / 2
-for k in range(36):
-    a = 2 * math.pi * k / 36
-    u, v = OPEN_U * 0.97 * math.cos(a), vc + vr * 0.97 * math.sin(a)
-    q = head_surface(face_dir(u, v), 0.026)
-    q.z = max(q.z, 0.655)
-    rim.append(q)
-ring_tube(P, rim, 0.013, 0.010, 'Ninja_ClothDark', ns=8)
-# centre seam: over the top from the front rim down the back, plus a stitched welt
-seam_pts, seam_n = [], []
-for i in range(len(hood_prof) - 1, 0, -1):
-    z, rx, ry = hood_prof[i]
-    seam_pts.append(hood_pt(z, rx, ry, math.pi) + Vector((0, 0.006, 0)))
-front = [hood_pt(z, rx, ry, 0.0) + Vector((0, -0.006, 0)) for z, rx, ry in hood_prof if z > 0.86]
-seam_pts = front + seam_pts
-for i, q in enumerate(seam_pts):
-    seam_n.append(Vector((0, q.y, q.z - 0.77)).normalized())
-ribbon(P, seam_pts, seam_n, 0.018, 0.003, 'Ninja_Seam', density=6)
+for k in range(41):
+    a = math.radians(-58 + (238 + 58) * k / 40)
+    ph, th = OPEN[2] * math.cos(a), OPEN[1] + OPEN[3] * math.sin(a)
+    rim.append(hood_pt(max(th, TH0 + 0.02), ph, 0.004))
+tube(P, rim, [0.012] * len(rim), 'Ninja_Cloth', ns=8, hint=(0, -1, 0), radii_b=[0.009] * len(rim))
+# flat stitched centre seam from the front of the rim over the top and down the back
+seam = [hood_pt(math.radians(t), 0.0, 0.0035) for t in range(116, 180, 4)] + [hood_pt(math.radians(t), math.pi, 0.0035) for t in range(178, 36, -4)]
+ribbon(P, seam, [(q - HOOD_C).normalized() for q in seam], 0.008, 0.0006, 'Ninja_Seam', density=6)
+# a few scuffs / scratches on the back of the hood
+for th0, ph0, dth, dph in ((118, 162, 4, 3), (104, 205, -2, 4), (132, 196, 4, -1.5), (92, 150, 3, 2)):
+    pts = [hood_pt(math.radians(th0 + dth * t), math.radians(ph0 + dph * t), 0.0066) for t in (0, 0.33, 0.66, 1.0)]
+    ribbon(P, pts, [(q - HOOD_C).normalized() for q in pts], 0.0012, 0.0003, 'Ninja_Scuff')
 
-# ---------------- Cape: torn, holed, folded; hangs behind ----------------
-P = part('Ninja_Cape')
-NC, NRW = 41, 19
-rng = random.Random(11)
-col_len = [1.0 - 0.09 * rng.random() for _ in range(NC)]
-for centre, depth, half in ((7, 0.22, 3), (19, 0.17, 2), (30, 0.24, 3), (37, 0.12, 2)):
-    for c in range(NC):
-        d = abs(c - centre)
-        if d <= half:
-            col_len[c] -= depth * (1 - d / (half + 0.5))
-CAPE_TOP, CAPE_BOT = 0.575, 0.085
-cv = []
-for r in range(NRW):
-    t = r / (NRW - 1)
+# ---------------- Cowl: draped shoulder shawl under the hood, over the top of the cape ----------------
+P = part('Ninja_Cowl')
+NSC, NRC = 40, 8
+G = []
+for r in range(NRC):
+    t = r / (NRC - 1)
     row = []
-    for c in range(NC):
-        ph = math.radians(118 + (242 - 118) * c / (NC - 1))
-        tl = t * col_len[c]
-        z = lerp(CAPE_TOP, CAPE_BOT, tl)
-        e = tl ** 0.8
-        rx, ry = lerp(0.13, 0.25, e), lerp(0.122, 0.215, e)
-        fold = 1 + 0.07 * e * math.sin(ph * 9 + 0.6) + 0.03 * e * math.sin(ph * 23)
-        row.append(P.bm.verts.new(Vector((rx * fold * math.sin(ph), -ry * fold * math.cos(ph), z))))
-    cv.append(row)
-holes = set()
-while len(holes) < 11:
-    r, c = rng.randint(7, 16), rng.randint(2, NC - 4)
-    if all(abs(r - a) + abs(c - b) > 3 for a, b in holes):
-        holes.add((r, c))
-skip = set()
-for r, c in holes:
-    skip |= {(r, c), (r, c + 1)} if rng.random() < 0.5 else {(r, c)}
-for r in range(NRW - 1):
-    for c in range(NC - 1):
-        if (r, c) in skip:
-            continue
-        P.face([cv[r][c], cv[r + 1][c], cv[r + 1][c + 1], cv[r][c + 1]],
-               [(c / 10, 4 - r / 5), (c / 10, 4 - (r + 1) / 5), ((c + 1) / 10, 4 - (r + 1) / 5), ((c + 1) / 10, 4 - r / 5)], 'Ninja_ClothDark')
+    for c in range(NSC):
+        ph = 2 * math.pi * c / NSC
+        back = max(0.0, -math.cos(ph)); frontv = max(0.0, math.cos(ph)) ** 6
+        zh = 0.472 - 0.095 * back ** 1.2 + 0.0 * max(0.0, math.cos(ph)) ** 1.5 - 0.012 * math.sin(ph) + 0.006 * math.sin(4 * ph + 0.3)
+        fr = max(0.0, math.cos(ph)) ** 2
+        z = lerp(0.585 - 0.05 * fr, zh, t)
+        e = 1 - (1 - t) ** 1.5
+        rx, ry = lerp(0.225 - 0.1 * fr, 0.262, e), lerp(0.21 - 0.1 * fr, 0.24, e)
+        f = 1 + t ** 1.4 * (0.07 * math.sin(5 * ph + 0.5) + 0.025 * math.sin(11 * ph + 1.3))
+        row.append(Vector((rx * f * math.sin(ph), -ry * f * math.cos(ph), z)))
+    G.append(row)
+grid_surface(P, G, 'Ninja_Cloth', wrap=True)
+hem = [lerp(G[-2][c], G[-1][c], 0.55) for c in range(NSC)]
+hn = [Vector((q.x, q.y, 0)).normalized() for q in hem]
+ribbon(P, [q + n * 0.0052 for q, n in zip(hem, hn)], hn, 0.011, 0.0012, 'Ninja_Seam', closed=True, density=6)
+ring_tube(P, [G[-1][c] + Vector((0, 0, 0.002)) for c in range(NSC)], 0.0075, 0.0085, 'Ninja_Cloth', ns=6)   # rolled hem: reads thick
 
-# ---------------- Clothing: tunic skirt, collar, overlap, belt, strap, pouches, pads, wraps, guards ----------------
+# ---------------- Cape: hangs from the left shoulder / back, flares out, ragged hem, round holes ----------------
+P = part('Ninja_Cape')
+CAPE_PH0, CAPE_PH1, CAPE_TOP = 48.0, 174.0, 0.44
+NU, NV = 38, 19
+rng = random.Random(11)
+def cape_len(u):
+    return lerp(0.31, 0.42, smooth01(u * 1.3))
+def cape_pt(u, v, folds=True):
+    ph = math.radians(lerp(CAPE_PH0, CAPE_PH1, u))
+    e = max(0.0, v) ** 0.85
+    R = lerp(0.14, 0.34, e)
+    if folds:
+        R *= 1 + e * (0.1 * math.sin(2 * math.pi * u * 4.2 + 0.7) + 0.035 * math.sin(2 * math.pi * u * 10.3 + 2.0))
+    q = Vector((R * math.sin(ph), -0.9 * R * math.cos(ph), CAPE_TOP - v * cape_len(u)))
+    q.x += 0.035 * e * (1 - u)       # the front edge swings out a little
+    return q
+# saw-tooth hem: alternating tips / notches at random spacing (+ a few deep tears)
+teeth, u = [], 0.0
+tip = True
+while u < 1.06:
+    teeth.append((u, rng.uniform(0.95, 1.0) if tip else (rng.uniform(0.6, 0.7) if rng.random() < 0.25 else rng.uniform(0.76, 0.88))))
+    u += rng.uniform(0.04, 0.085); tip = not tip
+def hem(u):
+    for (u0, a), (u1, b) in zip(teeth, teeth[1:]):
+        if u0 <= u <= u1:
+            return lerp(a, b, (u - u0) / (u1 - u0))
+    return teeth[-1][1]
+colj = [rng.uniform(-0.02, 0.02) for _ in range(NU)]
+params = [[(c / (NU - 1), r / (NV - 1) * (hem(c / (NU - 1)) + colj[c] * (r / (NV - 1)) ** 3)) for c in range(NU)] for r in range(NV)]
+# ragged side edges near the bottom
+for r in range(NV):
+    t = r / (NV - 1)
+    for c, sgn in ((0, 1), (NU - 1, -1)):
+        u, v = params[r][c]
+        params[r][c] = (u + sgn * max(0.0, t - 0.55) * 0.09 * (0.5 + 0.5 * math.sin(r * 2.7 + c)), v)
+HOLES = [(0.16, 0.72, 0.026), (0.40, 0.62, 0.03), (0.66, 0.78, 0.025), (0.86, 0.56, 0.027), (0.55, 0.42, 0.016)]
+def cape_metric(u, v, h):
+    W = math.radians(CAPE_PH1 - CAPE_PH0) * lerp(0.14, 0.34, max(0.0, h[1]) ** 0.85)
+    return ((u - h[0]) * W / h[2], (v - h[1]) * cape_len(h[0]) / h[2])
+params, skip = cut_and_snap(params, [(a, b, r) for a, b, r in HOLES], cape_metric)
+G = [[cape_pt(u, v) for u, v in row] for row in params]
+grid_surface(P, G, 'Ninja_ClothDark', skip=skip)
+
+# ---------------- Clothing: overlap edge, belt + rivets + pouches, back strap + buckle, wraps, guards ----------------
 P = part('Ninja_Clothing')
 def torso_r(z):
     for (z0, a0, b0), (z1, a1, b1) in zip(torso, torso[1:]):
@@ -615,136 +722,171 @@ def torso_r(z):
 def torso_pt(a, z, off):
     rx, ry = torso_r(z)
     return Vector(((rx + off) * math.sin(a), -(ry + off) * math.cos(a), z)), Vector((math.sin(a) / rx, -math.cos(a) / ry, 0)).normalized()
-skirt = [(0.372, 0.118, 0.097), (0.335, 0.124, 0.104), (0.295, 0.137, 0.116), (0.258, 0.149, 0.126), (0.232, 0.156, 0.132)]
-rings = [ellipse_ring((0, 0, z), (1, 0, 0), (0, 1, 0), rx, ry, 32) for z, rx, ry in skirt]
-for k in range(32):
-    rings[-1][k].z += 0.012 * math.sin(k * 2.3) + (0.01 if k % 5 == 0 else 0)
+# short coat hem below the belt (own object: Ninja_Tunic) with a stitched border
+TUN = [(0.302, 0.121, 0.103), (0.276, 0.13, 0.111), (0.25, 0.141, 0.121), (0.226, 0.152, 0.131), (0.206, 0.16, 0.138)]
+rings = [ellipse_ring((0, 0, z), (1, 0, 0), (0, 1, 0), rx, ry, 40) for z, rx, ry in TUN]
+for i, ring in enumerate(rings):
+    for k in range(40):
+        a = 2 * math.pi * k / 40
+        w = i / (len(rings) - 1)
+        ring[k] = ring[k] + Vector((math.sin(a), -math.cos(a), 0)) * (0.006 * w * math.sin(5 * a + 0.8)) + Vector((0, 0, 0.005 * w * math.sin(3 * a + 0.2)))
 loft(part('Ninja_Tunic'), rings, 'Ninja_Cloth', None, None)
-# collar where the hood meets the shoulders
-ring_tube(P, ellipse_ring((0, 0, 0.574), (1, 0, 0), (0, 1, 0), 0.152, 0.13, 32), 0.024, 0.017, 'Ninja_ClothDark', ns=8)
+hemp = [lerp(rings[-2][k], rings[-1][k], 0.72) for k in range(40)]
+hemn = [Vector((math.sin(2 * math.pi * k / 40) / 0.16, -math.cos(2 * math.pi * k / 40) / 0.138, 0)).normalized() for k in range(40)]
+ribbon(part('Ninja_Tunic'), [q + n * 0.0045 for q, n in zip(hemp, hemn)], hemn, 0.011, 0.0012, 'Ninja_Seam', closed=True, density=6)
 # kimono overlap edge across the chest
 pts, nrm = [], []
 for k in range(10):
     t = k / 9
-    q, n = torso_pt(math.radians(lerp(38, -24, t)), lerp(0.548, 0.375, t), 0.004)
+    q, n = torso_pt(math.radians(lerp(38, -24, t)), lerp(0.448, 0.305, t), 0.004)
     pts.append(q); nrm.append(n)
 ribbon(P, pts, nrm, 0.016, 0.004, 'Ninja_Seam')
-# belt + buckle
-BELT_Z = 0.35
-pts, nrm = [], []
-for k in range(40):
-    a = 2 * math.pi * k / 40
-    pts.append(Vector((0.127 * math.sin(a), -0.106 * math.cos(a), BELT_Z)))
-    nrm.append(Vector((math.sin(a) / 0.127, -math.cos(a) / 0.106, 0)).normalized())
+# belt + front buckle + rivets + a square loop plate on the back
+BELT_Z = 0.292
+brx, bry = [r + 0.012 for r in torso_r(BELT_Z)]
+def belt_pt(a, off=0.0):
+    return Vector(((brx + off) * math.sin(a), -(bry + off) * math.cos(a), BELT_Z)), Vector((math.sin(a) / brx, -math.cos(a) / bry, 0)).normalized()
+pts, nrm = zip(*[belt_pt(2 * math.pi * k / 44) for k in range(44)])
 ribbon(P, pts, nrm, 0.036, 0.008, 'Ninja_Strap', closed=True, vertical=True)
-frame_rect(P, (0, -0.114, BELT_Z), (1, 0, 0), (0, 0, 1), (0, -1, 0), 0.02, 0.019, 0.006, 0.007, 'Ninja_Metal')
-box(P, (0, -0.121, BELT_Z), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.003, 0.003, 0.017), 'Ninja_Metal')
-# diagonal chest strap (left shoulder -> right hip), buckle on the back
-pts, nrm = [], []
+q, n = belt_pt(0.0, 0.008)
+frame_rect(P, q, (1, 0, 0), (0, 0, 1), n, 0.021, 0.02, 0.006, 0.007, 'Ninja_Metal')
+box(P, q + n * 0.004, ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.003, 0.003, 0.018), 'Ninja_Metal')
+for ang in (52, 122, 238, 300):
+    q, n = belt_pt(math.radians(ang), 0.008)
+    ellipsoid(P, q, (0.0045, 0.0045, 0.0045), 'Ninja_Metal', ns=8, nz=5)
+q, n = belt_pt(math.radians(158), 0.008)
+t = Vector((0, 0, 1)).cross(n).normalized()
+box(P, q + n * 0.002, (t, n, (0, 0, 1)), (0.017, 0.004, 0.022), 'Ninja_LeatherBrown', bevel=0.003)
+ellipsoid(P, q + n * 0.007, (0.0042, 0.0042, 0.0042), 'Ninja_Metal', ns=8, nz=5)
+# diagonal strap: right shoulder -> across the back -> left hip, square buckle in the middle of the back
 def strap_z(a):
-    return 0.445 + 0.075 * math.sin(a) + 0.01 * math.cos(a)
+    return 0.33 - 0.06 * math.sin(a) + 0.006 * math.cos(a)
+pts, nrm = [], []
 for k in range(48):
     a = 2 * math.pi * k / 48
     q, n = torso_pt(a, strap_z(a), 0.012)
     pts.append(q); nrm.append(n)
 ribbon(P, pts, nrm, 0.03, 0.006, 'Ninja_Strap', closed=True)
-ab = math.radians(150)
+ab = math.radians(192)
 qb, nb = torso_pt(ab, strap_z(ab), 0.019)
 tb = (torso_pt(ab + 0.05, strap_z(ab + 0.05), 0.019)[0] - torso_pt(ab - 0.05, strap_z(ab - 0.05), 0.019)[0]).normalized()
-frame_rect(P, qb, tb, nb.cross(tb), nb, 0.02, 0.021, 0.006, 0.007, 'Ninja_Metal')
-# pouches on the belt (left, right, back-left)
-for ang, sz in ((70, 1.0), (-72, 0.9), (200, 0.85)):
+frame_rect(P, qb, tb, nb.cross(tb), nb, 0.022, 0.021, 0.0065, 0.008, 'Ninja_Metal')
+box(P, qb + nb * 0.004, (tb, nb, nb.cross(tb)), (0.0028, 0.003, 0.02), 'Ninja_Metal')
+# two tall pouches on the right hip, at the back
+for ang in (213, 238):
     a = math.radians(ang)
-    n = Vector((math.sin(a) / 0.127, -math.cos(a) / 0.106, 0)).normalized()
+    q, n = belt_pt(a, 0.0)
     t = Vector((0, 0, 1)).cross(n).normalized()
-    c = Vector((0.127 * math.sin(a), -0.106 * math.cos(a), BELT_Z - 0.012)) + n * 0.02 * sz
-    box(P, c, (t, n, (0, 0, 1)), (0.03 * sz, 0.017 * sz, 0.032 * sz), 'Ninja_LeatherBrown', bevel=0.007)
-    box(P, c + n * 0.003 + Vector((0, 0, 0.022 * sz)), (t, n, (0, 0, 1)), (0.032 * sz, 0.019 * sz, 0.012 * sz), 'Ninja_LeatherBlack', bevel=0.004)
-    box(P, c + n * (0.022 * sz) + Vector((0, 0, 0.012 * sz)), (t, n, (0, 0, 1)), (0.005, 0.003, 0.005), 'Ninja_Metal')
+    c = q + n * 0.024 - Vector((0, 0, 0.016))
+    box(P, c, (t, n, (0, 0, 1)), (0.021, 0.016, 0.031), 'Ninja_LeatherBrown', bevel=0.005)
+    box(P, c + n * 0.003 + Vector((0, 0, 0.021)), (t, n, (0, 0, 1)), (0.023, 0.018, 0.013), 'Ninja_LeatherBrown', bevel=0.004)
+    ellipsoid(P, c + n * 0.021 + Vector((0, 0, 0.012)), (0.0038, 0.0025, 0.0038), 'Ninja_Metal', ns=8, nz=5)
 for s in (1, -1):
     # knee pads
-    ellipsoid(P, KNEE[s] + Vector((0, -0.045, 0.006)), (0.038, 0.016, 0.042), 'Ninja_LeatherBlack', ns=14, nz=8,
+    ellipsoid(P, KNEE[s] + Vector((0, -0.05, 0.006)), (0.036, 0.016, 0.04), 'Ninja_LeatherBlack', ns=14, nz=8,
               axes=((1, 0, 0), (0, 1, -0.15), (0, 0.15, 1)))
-    # shin wraps
-    for i, z in enumerate((0.142, 0.168, 0.194)):
-        tilt = 0.006 * (1 if i % 2 else -1)
-        loop = [Vector((ANK[s].x + 0.047 * math.sin(a), -0.047 * math.cos(a), z + tilt * math.sin(a))) for a in [2 * math.pi * k / 16 for k in range(16)]]
-        ring_tube(P, loop, 0.006, 0.009, 'Ninja_ClothDark', ns=6)
-    # forearm guards with brown bands
+    # chunky horizontal wraps on the lower legs + a leather band on the boot top
+    for i, z in enumerate((0.124, 0.145, 0.166, 0.186)):
+        tilt = 0.005 * (1 if i % 2 else -1)
+        rr = 0.054 - 0.002 * i
+        loop = [Vector((ANK[s].x + rr * math.sin(a), -rr * math.cos(a), z + tilt * math.sin(a))) for a in [2 * math.pi * k / 14 for k in range(14)]]
+        ring_tube(P, loop, 0.0095, 0.011, 'Ninja_ClothDark', ns=5)
+    loop = [Vector((ANK[s].x + 0.059 * math.sin(a), -0.059 * math.cos(a), 0.108)) for a in [2 * math.pi * k / 18 for k in range(18)]]
+    ring_tube(P, loop, 0.006, 0.009, 'Ninja_LeatherBrown', ns=6)
+    # thick sleeve cuffs + forearm guards with brown bands
     d = arm_dir(s)
-    g0, g1 = lerp(ELB[s], WRI[s], 0.12), WRI[s] + d * 0.008
-    tube(P, [g0, lerp(g0, g1, 0.5), g1], [0.039, 0.039, 0.036], 'Ninja_LeatherBlack', ns=14, cap0=None, cap1=None)
+    A = Vector((0, -1, 0)); B = d.cross(A).normalized()
+    ring_tube(P, ellipse_ring(lerp(ELB[s], WRI[s], 0.06), A, B, 0.046, 0.046, 16), 0.012, 0.013, 'Ninja_ClothDark', ns=8)
+    g0, g1 = lerp(ELB[s], WRI[s], 0.16), WRI[s] + d * 0.006
+    tube(P, [g0, lerp(g0, g1, 0.5), g1], [0.042, 0.042, 0.039], 'Ninja_LeatherBlack', ns=14, cap0=None, cap1=None)
     for t in (0.3, 0.78):
         c = lerp(g0, g1, t)
-        A = Vector((0, -1, 0)); B = d.cross(A).normalized()
-        ring_tube(P, ellipse_ring(c, A, B, 0.041, 0.041, 14), 0.004, 0.0065, 'Ninja_LeatherBrown', ns=6)
+        ring_tube(P, ellipse_ring(c, A, B, 0.0435, 0.0435, 14), 0.004, 0.0065, 'Ninja_LeatherBrown', ns=6)
 
-# ---------------- Gloves ----------------
+# ---------------- Gloves (chunky fists) ----------------
 P = part('Ninja_Gloves')
 HAND_C = {}
 for s in (1, -1):
     A = arm_dir(s); Bf = Vector((0, -1, 0)); Cin = A.cross(Bf).normalized() * s
     hc = lerp(WRI[s], HTIP[s], 0.42)
     HAND_C[s] = (hc, A, Bf, Cin)
-    ellipsoid(P, hc, (0.034, 0.03, 0.022), 'Ninja_LeatherBlack', ns=14, nz=8, axes=(A, Bf, Cin))
-    for j, off in enumerate((-0.018, -0.006, 0.006, 0.018)):
-        b = hc + A * 0.022 + Bf * off
+    ellipsoid(P, hc, (0.037, 0.034, 0.027), 'Ninja_LeatherBlack', ns=14, nz=8, axes=(A, Bf, Cin))
+    for j, off in enumerate((-0.02, -0.0067, 0.0067, 0.02)):
+        b = hc + A * 0.024 + Bf * off
         L = 1.0 - 0.1 * abs(j - 1.5)
-        tube(P, [b, b + A * 0.016 * L, b + A * 0.021 * L + Cin * 0.014, b + A * 0.009 * L + Cin * 0.024],
-             [0.0095, 0.009, 0.0085, 0.008], 'Ninja_LeatherBlack', ns=8, hint=Cin)
-    tb = hc + Bf * 0.026 + A * 0.0
-    tube(P, [tb, tb + Bf * 0.012 + A * 0.012, tb + Bf * 0.006 + A * 0.026 + Cin * 0.012], [0.011, 0.01, 0.009], 'Ninja_LeatherBlack', ns=8, hint=Cin)
-    ring_tube(P, ellipse_ring(WRI[s] + A * 0.004, Bf, A.cross(Bf), 0.034, 0.034, 14), 0.005, 0.007, 'Ninja_LeatherBlack', ns=6)
+        tube(P, [b, b + A * 0.017 * L, b + A * 0.022 * L + Cin * 0.015, b + A * 0.01 * L + Cin * 0.026],
+             [0.0115, 0.011, 0.0105, 0.0095], 'Ninja_LeatherBlack', ns=8, hint=Cin)
+    tb = hc + Bf * 0.029
+    tube(P, [tb, tb + Bf * 0.013 + A * 0.013, tb + Bf * 0.007 + A * 0.028 + Cin * 0.013], [0.0125, 0.0115, 0.0105], 'Ninja_LeatherBlack', ns=8, hint=Cin)
+    ring_tube(P, ellipse_ring(WRI[s] + A * 0.004, Bf, A.cross(Bf), 0.035, 0.035, 14), 0.006, 0.008, 'Ninja_LeatherBlack', ns=6)
 
-# ---------------- Boots ----------------
+# ---------------- Boots: chunky, rounded toe, thick layered sole with tread bars ----------------
 P = part('Ninja_Boots')
+AX = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
 for s in (1, -1):
     x = ANK[s].x
-    tube(P, [Vector((x, 0.004, 0.158)), Vector((x, 0.004, 0.115)), Vector((x, 0.006, 0.07))], [0.05, 0.049, 0.048], 'Ninja_LeatherBlack', ns=16, cap0=None, cap1=None)
-    tube(P, [Vector((x, 0.038, 0.05)), Vector((x, 0.01, 0.054)), Vector((x, -0.045, 0.046)), Vector((x, -0.088, 0.038)), Vector((x, -0.106, 0.033))],
-         [0.046, 0.049, 0.05, 0.044, 0.032], 'Ninja_LeatherBlack', ns=16, hint=(1, 0, 0), radii_b=[0.036, 0.042, 0.036, 0.028, 0.02], ext=0.7)
-    ring_tube(P, ellipse_ring((x, 0.004, 0.158), (1, 0, 0), (0, 1, 0), 0.052, 0.052, 18), 0.009, 0.007, 'Ninja_LeatherBlack', ns=8)
-    box(P, (x, -0.033, 0.0105), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.05, 0.083, 0.0105), 'Ninja_Sole', bevel=0.006)
-    box(P, (x, -0.031, 0.025), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.048, 0.079, 0.006), 'Ninja_LeatherBlack', bevel=0.003)
-    box(P, (x, 0.033, 0.033), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.04, 0.012, 0.016), 'Ninja_LeatherBlack', bevel=0.005)
+    tube(P, [Vector((x, 0.004, 0.128)), Vector((x, 0.004, 0.096)), Vector((x, 0.006, 0.066))], [0.055, 0.054, 0.053], 'Ninja_LeatherBlack', ns=16, cap0=None, cap1=None)
+    tube(P, [Vector((x, 0.044, 0.058)), Vector((x, 0.014, 0.064)), Vector((x, -0.045, 0.057)), Vector((x, -0.09, 0.047)), Vector((x, -0.113, 0.041))],
+         [0.051, 0.055, 0.057, 0.051, 0.037], 'Ninja_LeatherBlack', ns=16, hint=(1, 0, 0), radii_b=[0.04, 0.046, 0.041, 0.033, 0.024], ext=0.75)
+    ring_tube(P, ellipse_ring((x, 0.004, 0.128), (1, 0, 0), (0, 1, 0), 0.057, 0.057, 18), 0.009, 0.008, 'Ninja_LeatherBlack', ns=8)
+    # sole: three stacked layers (horizontal ridges seen from behind) + tread bars underneath
+    box(P, (x, -0.031, 0.0115), AX, (0.058, 0.09, 0.0075), 'Ninja_Sole', bevel=0.0055)
+    box(P, (x, -0.031, 0.0215), AX, (0.0545, 0.0865, 0.0035), 'Ninja_Sole', bevel=0.002)
+    box(P, (x, -0.031, 0.0295), AX, (0.057, 0.089, 0.0055), 'Ninja_Sole', bevel=0.004)
+    for i in range(5):
+        box(P, (x, 0.038 - i * 0.034, 0.0032), AX, (0.05 - 0.004 * (i == 4), 0.0105, 0.0032), 'Ninja_Sole', bevel=0.0018)
+    box(P, (x, 0.036, 0.042), AX, (0.043, 0.013, 0.018), 'Ninja_LeatherBlack', bevel=0.006)
 
-# ---------------- Optional accessories (hidden by default, never both equipped) ----------------
+# ---------------- Optional accessories (hidden by default, never both equipped; both in the right hand) ----------------
 hc, A, Bf, Cin = HAND_C[-1]
 P = part('Acc_Dagger')   # right hand, blade forward
-g = hc + Cin * 0.0
-tube(P, [g + Vector((0, 0.038, 0)), g, g + Vector((0, -0.036, 0))], [0.0105, 0.011, 0.0105], 'Ninja_LeatherBlack', ns=10, hint=(0, 0, 1))
-ellipsoid(P, g + Vector((0, 0.043, 0)), (0.014, 0.01, 0.014), 'Ninja_Metal', ns=10, nz=6)
-box(P, g + Vector((0, -0.042, 0)), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.009, 0.005, 0.026), 'Ninja_Metal', bevel=0.002)
-tube(P, [g + Vector((0, -0.046, 0)), g + Vector((0, -0.1, 0.002)), g + Vector((0, -0.15, 0.012)), g + Vector((0, -0.17, 0.02))],
-     [0.0035, 0.003, 0.0022, 0.0006], 'Ninja_Blade', ns=8, hint=(1, 0, 0), radii_b=[0.016, 0.015, 0.01, 0.002], ext=0.2)
-hc, A, Bf, Cin = HAND_C[1]
-P = part('Acc_HandProp')  # left hand: a four-point throwing star held at the fingers
-c = hc + A * 0.03 + Cin * 0.006 + Bf * 0.0
-Nn = Cin; X1 = Bf; Y1 = Nn.cross(X1).normalized()
-outline = []
-for k in range(8):
-    a = math.pi / 4 * k
-    r = 0.048 if k % 2 == 0 else 0.013
-    outline.append(c + X1 * (r * math.cos(a)) + Y1 * (r * math.sin(a)))
-inner = [c + X1 * (0.007 * math.cos(math.pi / 4 * k)) + Y1 * (0.007 * math.sin(math.pi / 4 * k)) for k in range(8)]
-bm = P.bm
-T = [bm.verts.new(q + Nn * 0.002) for q in outline]; B = [bm.verts.new(q - Nn * 0.002) for q in outline]
-Ti = [bm.verts.new(q + Nn * 0.003) for q in inner]; Bi = [bm.verts.new(q - Nn * 0.003) for q in inner]
-for k in range(8):
-    k2 = (k + 1) % 8
-    uv = [(0, 0), (1, 0), (1, 1), (0, 1)]
-    P.face([T[k], T[k2], Ti[k2], Ti[k]], uv, 'Ninja_Blade', False)
-    P.face([B[k2], B[k], Bi[k], Bi[k2]], uv, 'Ninja_Blade', False)
-    P.face([B[k], B[k2], T[k2], T[k]], uv, 'Ninja_Blade', False)
-    P.face([Bi[k2], Bi[k], Ti[k], Ti[k2]], uv, 'Ninja_Metal', False)
+g = hc
+tube(P, [g + Vector((0, 0.04, 0)), g, g + Vector((0, -0.038, 0))], [0.011, 0.0115, 0.011], 'Ninja_LeatherBlack', ns=10, hint=(0, 0, 1))
+ellipsoid(P, g + Vector((0, 0.046, 0)), (0.015, 0.011, 0.015), 'Ninja_Metal', ns=10, nz=6)
+box(P, g + Vector((0, -0.044, 0)), AX, (0.01, 0.0055, 0.029), 'Ninja_Metal', bevel=0.002)
+tube(P, [g + Vector((0, -0.048, 0)), g + Vector((0, -0.11, 0.002)), g + Vector((0, -0.165, 0.013)), g + Vector((0, -0.19, 0.022))],
+     [0.0038, 0.0032, 0.0024, 0.0006], 'Ninja_Blade', ns=8, hint=(1, 0, 0), radii_b=[0.018, 0.017, 0.011, 0.002], ext=0.2)
+P = part('Acc_HandProp')  # right hand: a big foam hand on a stick, cheeky face drawn on the back of it
+up = (-Cin).normalized()
+side = Bf.cross(up).normalized()
+back = -Bf
+tube(P, [hc - up * 0.03, hc + up * 0.04, hc + up * 0.1], [0.0075, 0.0075, 0.0075], 'Ninja_PropRubber', ns=10, hint=back)
+for t in (0.045, 0.085):
+    ring_tube(P, ellipse_ring(hc + up * t, side, back, 0.0085, 0.0085, 10), 0.0022, 0.003, 'Ninja_Metal', ns=5)
+tube(P, [hc + up * 0.095, hc + up * 0.115, hc + up * 0.13], [0.011, 0.016, 0.022], 'Ninja_PropRubber', ns=10, hint=back, radii_b=[0.011, 0.012, 0.013])
+pc = hc + up * 0.17
+ellipsoid(P, pc, (0.05, 0.014, 0.047), 'Ninja_PropRubber', ns=16, nz=10, axes=(side, back, up))
+for j, o in enumerate((-0.033, -0.011, 0.011, 0.033)):
+    ang = math.radians((j - 1.5) * 9)
+    dr = up * math.cos(ang) + side * math.sin(ang)
+    b = pc + up * 0.03 + side * o
+    L = (0.048, 0.056, 0.054, 0.045)[j]
+    tube(P, [b, b + dr * L * 0.5, b + dr * L], [0.0135, 0.013, 0.0125], 'Ninja_PropRubber', ns=10, hint=side, radii_b=[0.0115, 0.011, 0.0105], ext=0.9)
+dth = (side * math.cos(math.radians(30)) + up * math.sin(math.radians(30))).normalized()
+b = pc + side * 0.042 - up * 0.008
+tube(P, [b, b + dth * 0.022, b + dth * 0.042], [0.0145, 0.0135, 0.0125], 'Ninja_PropRubber', ns=10, hint=side, radii_b=[0.0115, 0.011, 0.0105], ext=0.9)
+# face marks: ">" "<" eyes and a tongue-out mouth, slightly raised on the back of the hand
+fb = pc + back * 0.0145
+def mark(pts, r=0.0026):
+    tube(P, pts, [r] * len(pts), 'Ninja_PropMark', ns=6, hint=back)
+for sg in (1, -1):
+    e0 = fb + up * 0.012 + side * (0.02 * sg)
+    mark([e0 + side * 0.008 * sg + up * 0.007, e0 - side * 0.004 * sg, e0 + side * 0.008 * sg - up * 0.007])
+m0 = fb - up * 0.012
+mark([m0 + side * (0.012 * math.cos(math.radians(a))) - up * (0.01 * math.sin(math.radians(a))) for a in range(0, 181, 30)])
+mark([m0 - up * 0.004 + side * 0.004, m0 - up * 0.011 + side * 0.006, m0 - up * 0.004 + side * 0.008], 0.002)
 
 # ----------------------------------------------------------------------------------------------
 # objects (+ solidify for single-layer cloth) 
 # ----------------------------------------------------------------------------------------------
 coll = scene.collection
 OBJ = {}
-SOLID = {'Ninja_Hood': 0.012, 'Ninja_Cape': 0.007, 'Ninja_Tunic': 0.007}
+DECIMATE = {'Ninja_Clothing': 0.55, 'Ninja_Boots': 0.8}
+SOLID = {'Ninja_Hood': 0.012, 'Ninja_Cowl': 0.009, 'Ninja_Cape': 0.008, 'Ninja_Tunic': 0.007}
 for name, p in PARTS.items():
+    if name == 'Acc_HandProp':   # read at game scale: the foam hand is a big, chunky prop
+        for v in p.bm.verts:
+            v.co = hc + (v.co - hc) * 1.5
     bmesh.ops.recalc_face_normals(p.bm, faces=p.bm.faces[:])
     me = bpy.data.meshes.new(name)
     p.bm.to_mesh(me)
@@ -762,6 +904,12 @@ for name, p in PARTS.items():
         bm = bmesh.new(); bm.from_mesh(me)
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
         bm.to_mesh(me); bm.free()
+    if name in DECIMATE:   # trim dense straps / bands / soles to stay inside the ~25k tri budget
+        m = ob.modifiers.new('Decimate', 'DECIMATE')
+        m.decimate_type = 'COLLAPSE'; m.ratio = DECIMATE[name]; m.use_collapse_triangulate = False
+        with bpy.context.temp_override(object=ob, active_object=ob):
+            bpy.ops.object.modifier_apply(modifier=m.name)
+        me.validate(clean_customdata=False)
 
 # ----------------------------------------------------------------------------------------------
 # armature
@@ -782,11 +930,11 @@ def eb(name, h, t, parent=None, deform=True, r=0.05):
     BONE_R[name] = r
     return b
 eb('root', (0, 0, 0), (0, 0, 0.08), deform=False)
-eb('hips', (0, 0, 0.32), (0, 0, 0.40), 'root', r=0.10)
-eb('spine', (0, 0, 0.40), (0, 0, 0.47), 'hips', r=0.11)
-eb('chest', (0, 0, 0.47), (0, 0, 0.56), 'spine', r=0.11)
-eb('neck', (0, 0, 0.56), (0, 0, 0.62), 'chest', r=0.06)
-eb('head', (0, 0, 0.62), (0, 0, 0.98), 'neck', r=0.19)
+eb('hips', (0, 0, 0.262), (0, 0, 0.33), 'root', r=0.10)
+eb('spine', (0, 0, 0.33), (0, 0, 0.39), 'hips', r=0.11)
+eb('chest', (0, 0, 0.39), (0, 0, 0.465), 'spine', r=0.11)
+eb('neck', (0, 0, 0.465), (0, 0, 0.53), 'chest', r=0.06)
+eb('head', (0, 0, 0.53), (0, 0, 0.98), 'neck', r=0.2)
 for s, sd in ((1, 'L'), (-1, 'R')):
     eb('upper_arm.' + sd, SH[s], ELB[s], 'chest', r=0.04)
     eb('forearm.' + sd, ELB[s], WRI[s], 'upper_arm.' + sd, r=0.036)
@@ -794,17 +942,13 @@ for s, sd in ((1, 'L'), (-1, 'R')):
     eb('thigh.' + sd, HIPJ[s], KNEE[s], 'hips', r=0.055)
     eb('shin.' + sd, KNEE[s], ANK[s], 'thigh.' + sd, r=0.045)
     eb('foot.' + sd, ANK[s], TOE[s], 'shin.' + sd, r=0.045)
-def cape_pt(ph_deg, t):
-    ph = math.radians(ph_deg)
-    e = t ** 0.8
-    return Vector((lerp(0.13, 0.25, e) * math.sin(ph), -lerp(0.122, 0.215, e) * math.cos(ph), lerp(CAPE_TOP, CAPE_BOT, t)))
-CAPE_COLS = {'C': 180, 'L': 142, 'R': 218}
-for k, ph in CAPE_COLS.items():
+CAPE_COLS = {'L': 0.15, 'C': 0.5, 'R': 0.85}   # front-left edge, middle, back edge of the cape
+for k, u in CAPE_COLS.items():
     ts = (0.0, 0.33, 0.66, 1.0)
     par = 'chest'
     for i in range(3):
         nm = 'cape_%s%d' % (k, i + 1)
-        eb(nm, cape_pt(ph, ts[i]), cape_pt(ph, ts[i + 1]), par, r=0.08)
+        eb(nm, cape_pt(u, ts[i], False), cape_pt(u, ts[i + 1], False), par, r=0.08)
         par = nm
 bpy.ops.object.mode_set(mode='OBJECT')
 DEFORM = [b.name for b in arm.bones if b.use_deform]
@@ -833,14 +977,21 @@ def weights_for(obname, q):
     if obname == 'Acc_Dagger':
         return {'hand.R': 1.0}
     if obname == 'Acc_HandProp':
-        return {'hand.L': 1.0}
+        return {'hand.R': 1.0}
     if obname == 'Ninja_Hood':
-        if z > 0.655:
+        if z > 0.6:
             return {'head': 1.0}
-        f = max(0.0, min(1.0, (z - 0.575) / 0.08))
+        f = max(0.0, min(1.0, (z - 0.5) / 0.1))
         return {'head': 0.35 + 0.65 * f, 'chest': 0.65 * (1 - f)} if f < 1 else {'head': 1.0}
+    if obname == 'Ninja_Cowl':
+        out = {'chest': 0.7, 'neck': 0.3} if z > 0.5 else {'chest': 1.0}
+        wa = max(0.0, min(1.0, 1 - seg_dist(q, *SEG['upper_arm.' + sd]) / 0.075)) * 0.55
+        out = {n: v * (1 - wa) for n, v in out.items()}
+        if wa > 0:
+            out['upper_arm.' + sd] = wa
+        return out
     if obname == 'Ninja_Cape':
-        f = max(0.0, min(1.0, 1 - (CAPE_TOP - z) / 0.07))
+        f = max(0.0, min(1.0, 1 - (CAPE_TOP - z) / 0.06))
         w = dist_weights(q, [n for n in DEFORM if n.startswith('cape_')], 3)
         out = {n: v * (1 - f) for n, v in w.items()}
         out['chest'] = out.get('chest', 0) + f
@@ -849,10 +1000,10 @@ def weights_for(obname, q):
         return dist_weights(q, ['hand.' + sd, 'forearm.' + sd], 2)
     if obname == 'Ninja_Boots':
         return dist_weights(q, ['foot.' + sd, 'shin.' + sd], 2)
-    if obname == 'Ninja_Clothing' and z > 0.552 and abs(x) < 0.2:
+    if obname == 'Ninja_Clothing' and z > 0.47 and abs(x) < 0.2:
         return {'chest': 0.6, 'neck': 0.4}
     if obname == 'Ninja_Tunic':
-        return dist_weights(q, ['hips', 'spine', 'thigh.L', 'thigh.R'], 2) if z > 0.3 else \
+        return dist_weights(q, ['hips', 'spine', 'thigh.L', 'thigh.R'], 2) if z > 0.262 else \
             {**{n: v * 0.6 for n, v in dist_weights(q, ['thigh.' + sd], 1).items()}, 'hips': 0.4}
     names = GENERAL + [b + '.' + sd for b in ('upper_arm', 'forearm', 'hand', 'thigh', 'shin', 'foot')]
     return dist_weights(q, names, 3)
@@ -882,7 +1033,9 @@ def mirror_name(n):
 def mirror_pose(p):
     out = {}
     for n, v in p.items():
-        if n in ('lift', 'off'):
+        if n.startswith('cape_'):
+            out[n] = v          # the cape hangs on one side only: keep it as is
+        elif n in ('lift', 'off'):
             out[n] = v if n == 'lift' else (-v[0], v[1], v[2])
         else:
             out[mirror_name(n)] = (v[0], -v[1], -v[2])
@@ -892,12 +1045,14 @@ def merge(*ps):
     for p in ps:
         out.update(p)
     return out
-def cape(a, b, c, sway=0.0):
+def cape(a, b, c, sway=0.0, side=0.0):
+    """a/b/c: swing back per bone level (deg), sway: twist, side: flare outward to the character's left"""
     out = {}
     for k, w in (('C', 0.0), ('L', 1.0), ('R', -1.0)):
-        out['cape_%s1' % k] = (a, 0, sway * w * 0.5 + sway)
-        out['cape_%s2' % k] = (b, 0, sway * 0.5)
-        out['cape_%s3' % k] = (c, 0, sway * 0.3)
+        sk = side * (1.25 if k == 'L' else 1.0 if k == 'C' else 0.7)
+        out['cape_%s1' % k] = (a, -sk * 0.35, sway * w * 0.5 + sway)
+        out['cape_%s2' % k] = (b, -sk * 0.45, sway * 0.5)
+        out['cape_%s3' % k] = (c, -sk * 0.35, sway * 0.3)
     return out
 
 STAND = merge({'upper_arm.L': (0, 34, 0), 'upper_arm.R': (0, -34, 0), 'forearm.L': (-18, 0, 0), 'forearm.R': (-18, 0, 0),
@@ -905,45 +1060,45 @@ STAND = merge({'upper_arm.L': (0, 34, 0), 'upper_arm.R': (0, -34, 0), 'forearm.L
                'foot.L': (-7, 0, 0), 'foot.R': (-7, 0, 0), 'spine': (4, 0, 0), 'head': (-4, 0, 0)}, cape(4, 2, 2))
 IDLE_B = merge(STAND, {'chest': (-2, 0, 0), 'upper_arm.L': (0, 37, 0), 'upper_arm.R': (0, -37, 0), 'head': (-6, 0, 0),
                        'thigh.L': (-11, -5, 0), 'thigh.R': (-11, 5, 0), 'shin.L': (20, 5, 0), 'shin.R': (20, -5, 0),
-                       'foot.L': (-9, 0, 0), 'foot.R': (-9, 0, 0)}, cape(6, 4, 4, 2))
+                       'foot.L': (-9, 0, 0), 'foot.R': (-9, 0, 0)}, cape(6, 4, 4, 2, 3))
 RUN_BODY = {'spine': (14, 0, 0), 'chest': (8, 0, -6), 'hips': (0, 0, 6), 'head': (-20, 0, 6),
             'upper_arm.L': (68, 26, 0), 'upper_arm.R': (62, -26, 0), 'forearm.L': (12, 0, 0), 'forearm.R': (12, 0, 0)}
 RUN_C = merge(RUN_BODY, {'thigh.L': (-48, 0, 0), 'shin.L': (22, 0, 0), 'foot.L': (-6, 0, 0),
-                         'thigh.R': (32, 0, 0), 'shin.R': (58, 0, 0), 'foot.R': (22, 0, 0)}, cape(24, 8, 6, 4))
+                         'thigh.R': (32, 0, 0), 'shin.R': (58, 0, 0), 'foot.R': (22, 0, 0)}, cape(40, 18, 12, 4, 26))
 RUN_P = merge(RUN_BODY, {'hips': (0, 0, 0), 'chest': (8, 0, 0), 'head': (-20, 0, 0),
                          'thigh.L': (-6, 0, 0), 'shin.L': (14, 0, 0), 'foot.L': (-8, 0, 0),
-                         'thigh.R': (-38, 0, 0), 'shin.R': (104, 0, 0), 'foot.R': (12, 0, 0), 'lift': 0.022}, cape(31, 12, 10, 0))
+                         'thigh.R': (-38, 0, 0), 'shin.R': (104, 0, 0), 'foot.R': (12, 0, 0), 'lift': 0.022}, cape(46, 20, 14, 0, 30))
 CROUCH = {'thigh.L': (-58, -4, 0), 'thigh.R': (-58, 4, 0), 'shin.L': (88, 0, 0), 'shin.R': (88, 0, 0), 'foot.L': (-30, 0, 0),
           'foot.R': (-30, 0, 0), 'spine': (26, 0, 0), 'chest': (6, 0, 0), 'head': (-26, 0, 0),
           'upper_arm.L': (55, 26, 0), 'upper_arm.R': (55, -26, 0), 'forearm.L': (10, 0, 0), 'forearm.R': (10, 0, 0)}
 JUMP_UP = merge({'thigh.L': (-12, 0, 0), 'thigh.R': (-6, 0, 0), 'shin.L': (14, 0, 0), 'shin.R': (10, 0, 0), 'foot.L': (32, 0, 0),
                  'foot.R': (32, 0, 0), 'spine': (-4, 0, 0), 'head': (-6, 0, 0),
-                 'upper_arm.L': (-140, 12, 0), 'upper_arm.R': (-140, -12, 0), 'forearm.L': (-12, 0, 0), 'forearm.R': (-12, 0, 0)}, cape(12, 6, 4))
+                 'upper_arm.L': (-140, 12, 0), 'upper_arm.R': (-140, -12, 0), 'forearm.L': (-12, 0, 0), 'forearm.R': (-12, 0, 0)}, cape(14, 6, 4, 0, 6))
 JUMP_TUCK = merge({'thigh.L': (-72, -6, 0), 'thigh.R': (-34, 6, 0), 'shin.L': (104, 0, 0), 'shin.R': (64, 0, 0), 'foot.L': (12, 0, 0),
                    'foot.R': (22, 0, 0), 'spine': (10, 0, 0), 'head': (-12, 0, 0),
-                   'upper_arm.L': (-40, -22, 0), 'upper_arm.R': (-40, 22, 0), 'forearm.L': (-30, 0, 0), 'forearm.R': (-30, 0, 0)}, cape(32, 12, 10))
+                   'upper_arm.L': (-40, -22, 0), 'upper_arm.R': (-40, 22, 0), 'forearm.L': (-30, 0, 0), 'forearm.R': (-30, 0, 0)}, cape(36, 14, 10, 0, 18))
 FALL_A = merge({'thigh.L': (-36, -6, 0), 'thigh.R': (-10, 6, 0), 'shin.L': (52, 0, 0), 'shin.R': (28, 0, 0), 'foot.L': (20, 0, 0),
                 'foot.R': (24, 0, 0), 'spine': (-5, 0, 0), 'head': (-10, 0, 0),
-                'upper_arm.L': (-28, -55, 0), 'upper_arm.R': (-28, 55, 0), 'forearm.L': (-22, 0, 0), 'forearm.R': (-22, 0, 0)}, cape(72, 22, 16, -4))
+                'upper_arm.L': (-28, -55, 0), 'upper_arm.R': (-28, 55, 0), 'forearm.L': (-22, 0, 0), 'forearm.R': (-22, 0, 0)}, cape(72, 22, 16, -4, 10))
 FALL_B = merge(FALL_A, {'thigh.L': (-26, -6, 0), 'thigh.R': (-20, 6, 0), 'shin.L': (40, 0, 0), 'shin.R': (40, 0, 0),
-                        'upper_arm.L': (-32, -63, 0), 'upper_arm.R': (-32, 63, 0)}, cape(80, 28, 22, 4))
+                        'upper_arm.L': (-32, -63, 0), 'upper_arm.R': (-32, 63, 0)}, cape(80, 28, 22, 4, 14))
 LAND_IMPACT = merge(CROUCH, {'thigh.L': (-66, -6, 0), 'thigh.R': (-66, 6, 0), 'shin.L': (102, 0, 0), 'shin.R': (102, 0, 0),
                              'foot.L': (-36, 0, 0), 'foot.R': (-36, 0, 0), 'spine': (30, 0, 0), 'upper_arm.L': (42, 30, 0),
                              'upper_arm.R': (42, -30, 0)}, cape(20, 6, 6))
 LAND_MID = merge(CROUCH, {'thigh.L': (-44, -4, 0), 'thigh.R': (-44, 4, 0), 'shin.L': (70, 0, 0), 'shin.R': (70, 0, 0),
-                          'foot.L': (-25, 0, 0), 'foot.R': (-25, 0, 0), 'spine': (20, 0, 0)}, cape(30, 8, 8))
+                          'foot.L': (-25, 0, 0), 'foot.R': (-25, 0, 0), 'spine': (20, 0, 0)}, cape(30, 8, 8, 0, 8))
 LAND_END = merge(RUN_BODY, {'hips': (0, 0, 0), 'chest': (8, 0, 0), 'head': (-20, 0, 0), 'thigh.L': (-14, -3, 0), 'thigh.R': (-10, 3, 0),
-                            'shin.L': (24, 0, 0), 'shin.R': (20, 0, 0), 'foot.L': (-10, 0, 0), 'foot.R': (-10, 0, 0)}, cape(40, 10, 8))
+                            'shin.L': (24, 0, 0), 'shin.R': (20, 0, 0), 'foot.L': (-10, 0, 0), 'foot.R': (-10, 0, 0)}, cape(40, 10, 8, 0, 14))
 SLIDE_A = merge({'thigh.L': (-86, -4, 0), 'shin.L': (6, 0, 0), 'foot.L': (24, 0, 0),
                  'thigh.R': (-34, 10, 0), 'shin.R': (122, 0, 0), 'foot.R': (22, 0, 0),
                  'spine': (-20, 0, 0), 'chest': (-6, 0, 0), 'head': (16, 0, 0),
-                 'upper_arm.L': (-36, -28, 0), 'upper_arm.R': (40, 12, 0), 'forearm.L': (-24, 0, 0), 'forearm.R': (-10, 0, 0)}, cape(70, 16, 10, 3))
-SLIDE_B = merge(SLIDE_A, {'spine': (-23, 0, 0), 'head': (18, 0, 0), 'upper_arm.L': (-40, -32, 0)}, cape(77, 22, 16, -3))
+                 'upper_arm.L': (-36, -28, 0), 'upper_arm.R': (40, 12, 0), 'forearm.L': (-24, 0, 0), 'forearm.R': (-10, 0, 0)}, cape(70, 16, 10, 3, 18))
+SLIDE_B = merge(SLIDE_A, {'spine': (-23, 0, 0), 'head': (18, 0, 0), 'upper_arm.L': (-40, -32, 0)}, cape(77, 22, 16, -3, 24))
 
 ACTIONS = [
     ('Idle', [(0, STAND), (24, IDLE_B), (48, STAND)]),
     ('Run', [(0, RUN_C), (4, RUN_P), (8, mirror_pose(RUN_C)), (12, mirror_pose(RUN_P)), (16, RUN_C)]),
-    ('Jump', [(0, STAND), (4, CROUCH), (8, JUMP_UP), (14, JUMP_TUCK), (18, merge(JUMP_TUCK, cape(38, 14, 12)))]),
+    ('Jump', [(0, STAND), (4, CROUCH), (8, JUMP_UP), (14, JUMP_TUCK), (18, merge(JUMP_TUCK, cape(38, 14, 12, 0, 18)))]),
     ('Fall', [(0, FALL_A), (12, FALL_B), (24, FALL_A)]),
     ('Land', [(0, merge(FALL_A, {'thigh.L': (-15, -6, 0), 'thigh.R': (-12, 6, 0), 'shin.L': (16, 0, 0), 'shin.R': (14, 0, 0)})),
               (3, LAND_IMPACT), (9, LAND_MID), (20, LAND_END)]),

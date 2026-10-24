@@ -66,7 +66,10 @@ export class NinjaRig {
       for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
         if (seen.has(m) || !(m as THREE.MeshStandardMaterial).isMeshStandardMaterial) continue;
         seen.add(m);
-        this.materials.push(m as THREE.MeshStandardMaterial);
+        const sm = m as THREE.MeshStandardMaterial;
+        sm.color.multiplyScalar(RENDER.ninja.bright);
+        sm.envMapIntensity = RENDER.ninja.env;
+        this.materials.push(sm);
       }
     });
     for (const x of [-1, 1]) {

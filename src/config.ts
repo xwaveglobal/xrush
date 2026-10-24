@@ -319,7 +319,10 @@ export const RENDER = {
   player: (typeof location !== 'undefined' && /[?&]player=car/.test(location.search) ? 'car' : 'ninja') as 'ninja' | 'car',
   /** ninja: model (≈1.02 m) → game size; optional accessory (never both); clip timing */
   ninja: {
-    scale: 1.75,
+    scale: 2.2,
+    /** the ninja's own materials only: albedo × bright and environment light, so the dark cloth reads on the night road */
+    bright: 1.45,
+    env: 1.6,
     accessory: ((typeof location !== 'undefined' && /[?&]ninjaacc=(dagger|handprop)/.exec(location.search)?.[1]) || 'none') as 'none' | 'dagger' | 'handprop',
     /** Run plays at speed / runRate (clamped 0.85…1.9 ×) */
     runRate: 30,

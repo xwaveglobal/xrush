@@ -10,11 +10,19 @@ Newest entry on top. Every AI session adds a short entry: what was done, what is
 
 ---
 
+## 2026-10-24 — ninja rework from the owner's rear / front references (same branch, not pushed)
+
+**Done**: `assets-src/ninja/build_ninja.py` rebuilt against the reference sheets: big gumdrop hood with a soft peak, flat stitched seam, creases and scuffs; new `Ninja_Cowl` shoulder shawl; longer cape from the left shoulder with saw-tooth hem and round holes (Run / Jump push it back and to the side); diagonal strap with a back buckle, brown belt with rivets and two pouches, layered tunic hem, leg wraps, chunky layered boot soles, cuffs + forearm guards, bigger fists; black mask with peach skin only at nose / mouth, big angry eyes. Warm charcoal cloth + dark brown leather, woven / embossed fabric maps. Hand prop = foam hand in the right hand. About 24.4k tris. Game: `RENDER.ninja.scale` 1.75 → 2.2 (about the X1's screen size), `bright` / `env` for its materials, flight jets + nitro flames hidden for the ninja (kept for the car).
+
+**Not done / limits**: the cloth is still smoother than the painted references (no sculpted folds); the cape is bone-driven, not simulated.
+
+---
+
 ## 2026-10-24 — ninja player character (local branch `feature/ninja-character`, not pushed)
 
 **Done**: chibi ninja built in Blender from code (`assets-src/ninja/`, see its README) → `src/assets/models/ninja.glb` (skinned, PBR textures, clips Idle / Run / Jump / Fall / Land / Slide). It replaces only the X1's look: `src/render/car/NinjaRig.ts` + a small hook in `MeshCar.ts` (same root, ghost fade / edge light, nitro sockets, aura). Hitboxes, camera, controls, physics, scoring, UI, audio, lighting and map unchanged. Revert: `RENDER.player = 'car'` (or `?player=car`). State → clip: idle (stopped / locked / menu), Slide (DOWN), Jump (rising) / Fall (airborne), Land (touch-down), Run (speed-scaled).
 
-**Not done / limits**: the single-file build (`build:single`, GLTFLoader stubbed) falls back to the X1; phone FPS not measured; Vehicle-level flight jets / contact shadow still sized for the car.
+**Not done / limits**: the single-file build (`build:single`, GLTFLoader stubbed) falls back to the X1; phone FPS not measured; the contact shadow is still the car's.
 
 ---
 
