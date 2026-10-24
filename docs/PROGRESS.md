@@ -10,6 +10,14 @@ Newest entry on top. Every AI session adds a short entry: what was done, what is
 
 ---
 
+## 2026-10-24 — ninja player character (local branch `feature/ninja-character`, not pushed)
+
+**Done**: chibi ninja built in Blender from code (`assets-src/ninja/`, see its README) → `src/assets/models/ninja.glb` (skinned, PBR textures, clips Idle / Run / Jump / Fall / Land / Slide). It replaces only the X1's look: `src/render/car/NinjaRig.ts` + a small hook in `MeshCar.ts` (same root, ghost fade / edge light, nitro sockets, aura). Hitboxes, camera, controls, physics, scoring, UI, audio, lighting and map unchanged. Revert: `RENDER.player = 'car'` (or `?player=car`). State → clip: idle (stopped / locked / menu), Slide (DOWN), Jump (rising) / Fall (airborne), Land (touch-down), Run (speed-scaled).
+
+**Not done / limits**: the single-file build (`build:single`, GLTFLoader stubbed) falls back to the X1; phone FPS not measured; Vehicle-level flight jets / contact shadow still sized for the car.
+
+---
+
 ## 2026-10-24 — v4.6.1: owner decisions (same branch `feature/sky-roadster-v4.6-big-update`)
 
 **Decided by the owner**:

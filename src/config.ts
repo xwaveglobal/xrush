@@ -311,6 +311,26 @@ export const CLOUD = {
  */
 export const RENDER = {
   car: (typeof location !== 'undefined' && /[?&]car=sprite/.test(location.search) ? 'sprite' : 'mesh') as 'mesh' | 'sprite',
+  /**
+   * player look (visual only): 'ninja' = the chibi ninja character (src/assets/models/ninja.glb, built by
+   * assets-src/ninja/build_ninja.py, driven by render/car/NinjaRig.ts); 'car' = the XWAVE X1 exactly as
+   * before. Revert to the car: set this to 'car' (or `?player=car` in the page URL).
+   */
+  player: (typeof location !== 'undefined' && /[?&]player=car/.test(location.search) ? 'car' : 'ninja') as 'ninja' | 'car',
+  /** ninja: model (≈1.02 m) → game size; optional accessory (never both); clip timing */
+  ninja: {
+    scale: 1.75,
+    accessory: ((typeof location !== 'undefined' && /[?&]ninjaacc=(dagger|handprop)/.exec(location.search)?.[1]) || 'none') as 'none' | 'dagger' | 'handprop',
+    /** Run plays at speed / runRate (clamped 0.85…1.9 ×) */
+    runRate: 30,
+    /** crossfade between clips (s) and how long the landing clip plays (s) */
+    fade: 0.12,
+    landTime: 0.36,
+    /** turn toward a lane change (rad per lane-speed) */
+    laneYaw: 0.28,
+    /** nitro thrust size on the ninja's back (× the X1's) */
+    thrust: 0.6,
+  },
   /** model (real-size metres) → game size. 0.76 ≈ 1.66 m wide: close to the 1.4 m hitbox, and the rear
    *  reads about the same size on screen as the old rear image did from the unchanged chase camera */
   carScale: 0.76,

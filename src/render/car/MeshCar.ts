@@ -8,6 +8,7 @@ import { ShieldAura, installCarFx, makeCarFxUniforms } from './CarFx.ts';
 import { CAR_HALF } from '../../config.ts';
 import { x1BadgeCanvas, x1CarbonCanvas, x1FlakeCanvas, x1TreadCanvas } from './x1Textures.ts';
 import x1Url from '../../assets/models/xwave-x1.glb';
+import { NinjaRig } from './NinjaRig.ts';
 
 /** what the 3D car needs from a colourway (subset of VehicleSkin) */
 export interface MeshSkin {
@@ -50,6 +51,8 @@ export class MeshCar {
   private nozzleMat: THREE.SpriteMaterial;
   /** the X1 node (its origin is on the road, so scaling it squashes the car toward the asphalt) */
   private model: THREE.Object3D | null = null;
+  /** RENDER.player = 'ninja': the character replaces the X1 visual (same root, effects and API) */
+  private ninja: NinjaRig | null = null;
   private baseScale = 1;
   /** v4.6 size multiplier (fixed camera view: RENDER.carScaleFixed / carScale) */
   private scaleK = 1;
@@ -59,6 +62,7 @@ export class MeshCar {
   /** draw the car k × its normal size (visual only) — e.g. bigger for the fixed camera view */
   setScaleK(k: number) {
     this.scaleK = k;
+    if (this.ninja) return this.ninja.setScaleK(k);
     if (this.model) this.model.scale.set(this.sc, this.sc * RENDER.carHeightScale, this.sc);
     for (const w of this.wheels) w.r = w.r0 * this.sc;
   }
@@ -145,6 +149,14 @@ export class MeshCar {
   }
 
   private async load() {
+    if (RENDER.player === 'ninja') {
+      try {
+        this.buildNinja(await NinjaRig.load());
+        return;
+      } catch (e) {
+        console.warn('[ninja] character unavailable, using the X1 car', e);
+      }
+    }
     try {
       this.build(parseGlb(await assetBytes(x1Url)));
     } catch (e) {
@@ -256,7 +268,42 @@ export class MeshCar {
     // nitro sockets → flames
     for (const id of ['NitroSocket_L', 'NitroSocket_R']) {
       const so = model.getObjectByName(id);
-      if (!so) continue;
+      if (so) this.addThrust(so);
+    }
+    this.root.add(model);
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    this.noseOverhang = Math.max(0, -box.min.z - CAR_HALF.z);
+    this.zFront = box.min.z;
+    this.zBack = box.max.z;
+    this.ready = true;
+    this.onReady?.();
+  }
+
+  /** the ninja character: its materials get the same edge light / ghost fade as the X1's */
+  private buildNinja(n: NinjaRig) {
+    this.ninja = n;
+    this.model = n.root;
+    n.setScaleK(this.scaleK);
+    for (const m of n.materials) this.mats.set(m.name, m);
+    for (const m of this.mats.values()) {
+      installCarFx(m, this.fx);
+      this.orig.set(m, { color: m.color.getHex(), emissive: m.emissive.getHex(), ei: m.emissiveIntensity });
+      this.fadeState.push({ m, transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite });
+    }
+    for (const so of n.sockets) this.addThrust(so);
+    this.root.add(n.root);
+    n.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(n.root);
+    this.zFront = box.min.z;
+    this.zBack = box.max.z;
+    this.ready = true;
+    this.onReady?.();
+  }
+
+  /** nitro thrust flames + nozzle glow on one socket */
+  private addThrust(so: THREE.Object3D) {
+    {
       this.sockets.push(so);
       for (const [i, rad] of [0.16, 0.1, 0.05].entries()) {
         // cone from the socket (z 0, wide end) to the tip (z 1)
@@ -278,14 +325,6 @@ export class MeshCar {
       so.add(nz);
       this.nozzles.push(nz);
     }
-    this.root.add(model);
-    model.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(model);
-    this.noseOverhang = Math.max(0, -box.min.z - CAR_HALF.z);
-    this.zFront = box.min.z;
-    this.zBack = box.max.z;
-    this.ready = true;
-    this.onReady?.();
   }
 
   /** colourway + locked (dark silhouette) preview */
@@ -324,6 +363,11 @@ export class MeshCar {
   update(dt: number, speed: number, lat: number, air: number, locked: boolean, jumping = false, duck = 0) {
     if (!this.ready) return;
     this.t += dt;
+    if (this.ninja) {
+      this.ninja.update(dt, speed, lat, air, locked, jumping, duck);
+      this.updateFx(dt, speed, locked);
+      return;
+    }
     // ---- DOWN (dive under a beam): the whole car presses down toward the road — squashes low and a
     // little wider/longer, with a small spring overshoot on entry and on release (arcade squash).
     // Wheels stay on the asphalt; a soft light pool under the car reads as "skimming the road".
@@ -371,6 +415,11 @@ export class MeshCar {
       this.spoiler.rotation.x = -RENDER.spoilerAngle * sk;
       this.spoiler.position.y = this.spoilerBaseY + RENDER.spoilerRise * sk;
     }
+    this.updateFx(dt, speed, locked);
+  }
+
+  /** nitro thrust, shield / Turbo aura, pickup sweep (X1 and ninja) */
+  private updateFx(dt: number, speed: number, locked: boolean) {
     // ---- nitro thrust from the sockets: length follows the boost and (a little) the speed
     const k = locked ? 0 : clamp01(this.nitro);
     const show = k > 0.02;
@@ -547,7 +596,8 @@ export class MeshCar {
     this.prevAir = 0;
     this.duckS.snap(0);
     this.duckS.velocity = 0;
-    if (this.model) this.model.scale.set(this.sc, this.sc * RENDER.carHeightScale, this.sc);
+    if (this.model && !this.ninja) this.model.scale.set(this.sc, this.sc * RENDER.carHeightScale, this.sc);
+    this.ninja?.reset();
     this.aura.reset();
     this.turboAura.reset();
     this.sweepT = 99;
