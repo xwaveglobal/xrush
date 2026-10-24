@@ -1,8 +1,8 @@
 {
   "name": "xwave-flying-run",
   "private": true,
-  "version": "1.0.0",
-  "description": "XWAVE Flying Run \u2014 mobile-first 3D flying-car endless runner (Three.js + TypeScript + Vite)",
+  "version": "1.0.1",
+  "description": "XWAVE Flying Run — mobile-first 3D flying-car endless runner (Three.js + TypeScript + Vite)",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
