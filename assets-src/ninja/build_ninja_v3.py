@@ -5,12 +5,17 @@
 #   blender -b --factory-startup -P assets-src/ninja/build_ninja_v3.py -- --blend out.blend --glb out.glb
 #
 # Inputs (assets-src/ninja/fal_v3/):  ninja_v2_textured.glb  textured ~30k tri mesh (glTF, faces +X)
-#                                     basecolor_v4.webp      albedo (v4: hood back seam/crease, face band, scarf; --basecolor)
-#                                     normal_v4.webp         normal map with the hood seam flattened (--normal, '-' = keep v2)
+#                                     basecolor_v5.webp      albedo (v5: near-black hood with baked fold shading, front crown
+#                                                            strip removed; made by scripts/v5_tex.py from basecolor_v4; --basecolor)
+#                                     normal_v5.webp         normal map, scan noise on the hood flattened (--normal, '-' = keep v2)
 #                                     emit_v3.png            eye-white emission mask
 # v4: hood_sculpt() (soft dome, no back ridge, tip falling back; --no-sculpt to skip), procedural cape
 # keys (cape_keys: hangs down / trails back, side chains pulled in, travelling wave + flutter), extra
 # local weight relaxation at the stretch hot spots (HOT).
+# v5: hood rebuilt: small scan cracks around the hood closed (holes_fill), hood shell projected onto an
+# analytic gumdrop (piecewise super-ellipsoid + soft tip leaning back, HOOD), Taubin-smoothed (extra on
+# the brim, open borders pinned), a few real cloth folds pressed in. Topology/UVs kept; the hood stays
+# head-rigid via the head weights computed after the sculpt.
 # Reused from the previous build (git: build_ninja.py): bone names, the six pose sets, cape helper,
 # in-place baking, the optional accessories (appended from --acc-blend, default: old NinjaCharacter.blend
 # saved as fal_v3/accessories.blend).
@@ -56,6 +61,35 @@ body.data.transform(Matrix.Translation((-0.5 * (co[:, 0].max() + co[:, 0].min())
 bm = bmesh.new(); bm.from_mesh(body.data)
 n0 = len(bm.verts)
 bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=0.0004)
+# v5: close the small cracks of the scan around the hood / brim / cowl (they open once the hood shell is
+# reshaped): fill boundary loops of <= 8 edges above the shoulders, UVs taken from the vertices' own faces
+uvl = bm.loops.layers.uv.active
+bnd_e = [e for e in bm.edges if e.is_boundary]
+loops_, seen_ = [], set()
+for e0 in bnd_e:
+    if e0 in seen_:
+        continue
+    comp, st = [], [e0]
+    while st:
+        e = st.pop()
+        if e in seen_:
+            continue
+        seen_.add(e); comp.append(e)
+        for v in e.verts:
+            st += [f for f in v.link_edges if f.is_boundary and f not in seen_]
+    loops_.append(comp)
+small = [c for c in loops_ if len(c) <= 8 and sum(v.co.z for e in c for v in e.verts) / (2 * len(c)) > 0.58]
+old_faces = set(bm.faces)
+for c in small:
+    bmesh.ops.holes_fill(bm, edges=c, sides=len(c))
+new_faces = [f for f in bm.faces if f not in old_faces]
+bmesh.ops.triangulate(bm, faces=new_faces)
+for f in [f for f in bm.faces if f not in old_faces]:
+    for lp in f.loops:
+        src = [l for l in lp.vert.link_loops if l.face in old_faces]
+        if src:
+            lp[uvl].uv = src[0][uvl].uv
+print('[ninja] closed %d small scan cracks around the hood (%d tris)' % (len(small), len([f for f in bm.faces if f not in old_faces])))
 bm.to_mesh(body.data); bm.free()
 for p in body.data.polygons:
     p.use_smooth = True
@@ -67,50 +101,116 @@ print('[ninja] welded verts %d -> %d' % (n0, len(body.data.vertices)))
 # ----------------------------------------------------------------------------------------------
 def _ss(t):
     t = np.clip(t, 0, 1); return t * t * (3 - 2 * t)
+HOOD = dict(c=(0.0, -0.01, 0.74), ax=0.19, ayb=0.158, ayf=0.23, azu=0.25, azd=0.17, p=2.1,
+            tip=(32, 0.055, 0.42), droop=(55, 0.015, 0.30))
+def _vnormals(Q, F):
+    fn = np.cross(Q[F[:, 1]] - Q[F[:, 0]], Q[F[:, 2]] - Q[F[:, 0]])
+    vn = np.zeros_like(Q)
+    for k in range(3):
+        np.add.at(vn, F[:, k], fn)
+    return vn / np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-12)
+def hood_target(D, H=HOOD):
+    """radius of the clean hood shell along unit directions D (from the hood centre): a piecewise
+    super-ellipsoid dome + a soft tip leaning back (and a smaller droop behind it, so it falls back/down)"""
+    p = H['p']
+    ay = np.where(D[:, 1] > 0, H['ayb'], H['ayf']); az = np.where(D[:, 2] > 0, H['azu'], H['azd'])
+    r = (np.abs(D[:, 0] / H['ax']) ** p + np.abs(D[:, 1] / ay) ** p + np.abs(D[:, 2] / az) ** p) ** (-1 / p)
+    for ang, amp, sig in (H['tip'], H['droop']):
+        t = np.array([0, math.sin(math.radians(ang)), math.cos(math.radians(ang))])
+        th = np.arccos(np.clip(D @ t, -1, 1))
+        r = r + amp * np.exp(-(th / sig) ** 2)
+    return r
 def hood_sculpt(me):
+    """v5: replace the lumpy Tripo hood shell by a clean analytic dome (verts slide along rays from the
+    hood centre), Taubin-smooth the brim / cowl join, then press in a few real cloth folds."""
     P = np.array([v.co[:] for v in me.vertices])
     E = np.array([e.vertices[:] for e in me.edges])
+    F = np.array([q.vertices[:] for q in me.polygons])
     n = len(P)
     deg = np.bincount(E.ravel(), minlength=n).astype(float)
     def lap(Q):
         acc = np.zeros_like(Q)
         np.add.at(acc, E[:, 0], Q[E[:, 1]]); np.add.at(acc, E[:, 1], Q[E[:, 0]])
         return acc / np.maximum(deg, 1)[:, None] - Q
+    def relax(m, k):
+        for _ in range(k):
+            acc = np.zeros(n); np.add.at(acc, E[:, 0], m[E[:, 1]]); np.add.at(acc, E[:, 1], m[E[:, 0]])
+            m = 0.5 * m + 0.5 * acc / np.maximum(deg, 1)
+        return m
+    # open borders of the scan (small holes at the brim corners / cowl join): pinned, with a soft falloff
+    es = np.sort(np.r_[F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]], 1)
+    ue, ce = np.unique(es, axis=0, return_counts=True)
+    bnd = np.zeros(n); bnd[np.unique(ue[ce != 2])] = 1.0
+    for _ in range(4):
+        acc = np.zeros(n); np.add.at(acc, E[:, 0], bnd[E[:, 1]]); np.add.at(acc, E[:, 1], bnd[E[:, 0]])
+        bnd = np.maximum(bnd, 0.75 * acc / np.maximum(deg, 1) * 2)
+    pin = 1 - np.clip(bnd, 0, 1)
+    C = np.array(HOOD['c'])
     X, Y, Z = P.T
-    back = _ss((Y - 0.0) / 0.05) * _ss((Z - 0.64) / 0.05)
-    top = _ss((Z - 0.88) / 0.04) * _ss((Y + 0.15) / 0.03)    # the seam also runs over the crown to the brim
-    ridge = np.exp(-(X / 0.04) ** 2) * np.maximum(back, top)
-    m = np.clip(np.maximum(ridge, 0.6 * back), 0, 1)[:, None]
-    Q = P.copy()
-    for _ in range(40):                      # Taubin: smooth without shrinking
-        Q += 0.5 * m * lap(Q)
-        Q -= 0.53 * m * lap(Q)
-    X, Y, Z = Q.T
-    # flatten the back bulge (max at z ~ 0.73)
-    g = np.exp(-((Z - 0.75) / 0.09) ** 2) * _ss((Z - 0.64) / 0.04)
-    Y2 = np.where(Y > 0.05, 0.05 + (Y - 0.05) * (1 - 0.22 * g), Y)
-    # soft tip: pull the crown back and a little down, strongest at the top-back
-    r = np.sqrt(X ** 2 + (Y - 0.03) ** 2 + (Z - 0.975) ** 2)
-    t = np.exp(-(r / 0.075) ** 2) * _ss((Y + 0.06) / 0.08)
-    Y2 = Y2 + 0.032 * t
-    Z2 = Z - 0.016 * t * _ss((Y + 0.02) / 0.06)
-    Q = np.c_[X, Y2, Z2]
-    m2 = (_ss((Z - 0.80) / 0.05) * _ss((Y + 0.05) / 0.05))[:, None]
-    for _ in range(8):
-        Q += 0.5 * m2 * lap(Q); Q -= 0.53 * m2 * lap(Q)
+    N0 = _vnormals(P, F)
+    V = P - C; R = np.linalg.norm(V, axis=1); D = V / np.maximum(R, 1e-9)[:, None]
+    face = (Y < -0.10) & (np.abs(X) < 0.135) & (Z < 0.87) & (Z > 0.58)       # mask / skin / lining inside the opening
+    outward = _ss(((N0 * D).sum(1) + 0.05) / 0.35)
+    # face opening as a cone around the front (-Y): azimuth < ~45 deg, elevation < ~34 deg; the brim rim sits at its edge
+    az = np.degrees(np.arctan2(D[:, 0], -D[:, 1])); el = np.degrees(np.arcsin(np.clip(D[:, 2], -1, 1)))
+    rho = np.sqrt((az / 45) ** 2 + (np.maximum(el, 0) / 34) ** 2)
+    w = outward * _ss((rho - 1.05) / 0.55) * _ss((Z - 0.63) / 0.06) * (~face)
+    w = w * _ss((R / hood_target(D) - 0.80) / 0.08)                          # only the shell itself, never the head inside
+    w = relax(w, 3)                                               # no hard steps between shell / lining
+    Q = P + (w * (hood_target(D) - R))[:, None] * D
+    # smooth: the whole hood (shell, brim, crown front, cowl join), not the face
+    m = _ss((Z - 0.60) / 0.04) * (~face)
+    m = (relax(m, 2) * pin)[:, None]
+    for _ in range(30):
+        Q += 0.5 * m * lap(Q); Q -= 0.53 * m * lap(Q)
+    # the rolled brim around the face opening: extra smoothing (it was wrinkled / cracked in the scan)
+    mb = (np.exp(-((rho - 1.1) / 0.28) ** 2) * _ss((Z - 0.70) / 0.05) * pin * (~face))
+    mb = relax(mb, 2)[:, None]
+    for _ in range(40):
+        Q += 0.5 * mb * lap(Q); Q -= 0.53 * mb * lap(Q)
+    # re-project the fully-dome part once more (smoothing pulled it a little) and blend
+    V = Q - C; R = np.linalg.norm(V, axis=1); D = V / np.maximum(R, 1e-9)[:, None]
+    Q = Q + (0.8 * w * (hood_target(D) - R))[:, None] * D
+    for _ in range(6):
+        Q += 0.5 * m * lap(Q); Q -= 0.53 * m * lap(Q)
+    # cloth folds (pressed in along the normal): creases from the tip sweeping down/out over the back,
+    # plus two soft horizontal sags above the cowl
+    Nn = _vnormals(Q, F)
+    V = Q - C; R = np.linalg.norm(V, axis=1); D = V / np.maximum(R, 1e-9)[:, None]
+    fold = np.zeros(n)
+    t = np.array([0, math.sin(math.radians(40)), math.cos(math.radians(40))])
+    for az_, el_, dep, wid in ((35, -5, 0.013, 0.085), (-35, -5, 0.013, 0.085), (65, 10, 0.010, 0.075), (-65, 10, 0.010, 0.075),
+                               (12, -25, 0.008, 0.07), (-18, -22, 0.008, 0.07)):
+        b = np.array([math.sin(math.radians(az_)) * math.cos(math.radians(el_)), math.cos(math.radians(az_)) * math.cos(math.radians(el_)),
+                      math.sin(math.radians(el_))])                    # end direction (azimuth from +Y = back)
+        pn = np.cross(t, b); pn /= np.linalg.norm(pn)
+        dist = np.abs(D @ pn)                                          # angular distance to the great circle t->b
+        u = (D @ b - (D @ t) * (t @ b))                                # crude along-arc parameter: >0 between t and b
+        along = _ss((D @ (b - t * (t @ b)) / np.linalg.norm(b - t * (t @ b))) / 0.25) * _ss((D @ b + 0.2) / 0.3)
+        fold += dep * np.exp(-(dist / wid) ** 2) * along
+    sag = (_ss((Y - 0.02) / 0.05) * (np.exp(-((Z - 0.672) / 0.012) ** 2) * 0.004 + np.exp(-((Z - 0.70) / 0.012) ** 2) * 0.003)
+           * np.exp(-(X / 0.11) ** 2))
+    fold = (fold + sag) * w
+    print('[ninja] hood folds: max %.1f mm, verts > 2 mm: %d' % (1000 * fold.max(), (fold > 0.002).sum()))
+    Q = Q - Nn * fold[:, None]
+    for _ in range(2):
+        Q += 0.5 * m * 0.5 * lap(Q); Q -= 0.53 * m * 0.5 * lap(Q)
     for v, q in zip(me.vertices, Q):
         v.co = q
-    print('[ninja] hood sculpt: max move %.1f mm, back max y %.3f -> %.3f' % (
-        1000 * np.linalg.norm(Q - P, axis=1).max(), P[P[:, 2] > 0.64, 1].max(), Q[Q[:, 2] > 0.64, 1].max()))
+    mv = np.linalg.norm(Q - P, axis=1)
+    print('[ninja] hood sculpt v5: %d verts on the dome (w>0.5), max move %.1f mm, mean %.1f mm, back max y %.3f -> %.3f' % (
+        (w > 0.5).sum(), 1000 * mv.max(), 1000 * mv[w > 0.5].mean(), P[P[:, 2] > 0.64, 1].max(), Q[Q[:, 2] > 0.64, 1].max()))
+    return w
+HOOD_W = None
 if '--no-sculpt' not in argv:
-    hood_sculpt(body.data)
+    HOOD_W = hood_sculpt(body.data)
 
 # material: swap in the v3 albedo, eye-white emission
 mat = body.data.materials[0]; mat.name = 'Ninja_Fal'
 nt = mat.node_tree; N = nt.nodes; Lk = nt.links
 bsdf = [n for n in N if n.type == 'BSDF_PRINCIPLED'][0]
 bc_node = bsdf.inputs['Base Color'].links[0].from_node
-img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v4.webp')))
+img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v5.webp')))
 img.name = 'ninja_basecolor'; img.alpha_mode = 'STRAIGHT'
 old = bc_node.image
 bc_node.image = img
@@ -119,7 +219,7 @@ if old and old.users == 0:
 if not bsdf.inputs['Alpha'].is_linked:
     Lk.new(bc_node.outputs['Alpha'], bsdf.inputs['Alpha'])
 em = N.new('ShaderNodeTexImage'); em.image = bpy.data.images.load(os.path.join(SRC, _arg('--emit-tex', 'emit_v3.png'))); em.image.name = 'ninja_emit'
-NRM = _arg('--normal', 'normal_v4.webp')
+NRM = _arg('--normal', 'normal_v5.webp')
 if NRM != '-':
     for n_ in N:
         if n_.type == 'TEX_IMAGE' and n_.image and 'normal' in n_.image.name.lower():

@@ -52,6 +52,20 @@ fal cost for the whole v3 asset: about **$1.15** (Nano Banana Pro edits + Tripo 
   chest strap buckle, cape hem corners).
 Size: 29,997 tris body (+1,100 hand prop / +332 dagger, hidden by default), GLB ≈ 2.2 MB.
 
+### v5 hood rebuild (no extra fal spend)
+- **Geometry** — `hood_sculpt()` v5 in `build_ninja_v3.py`: 14 small open scan cracks around the hood are closed first
+  (`holes_fill`, ≤8-edge loops); then every outward-facing hood shell vertex outside the face-opening cone is slid along
+  its ray from the head centre onto an analytic gumdrop (`HOOD`: piecewise super-ellipsoid, p = 2.1, with a soft tip
+  ~32° behind the vertical and a slight droop), Taubin-smoothed (extra passes on the brim, open borders pinned),
+  re-projected, and six shallow cloth folds (≤ ~14 mm) are pressed in from the tip towards the back/sides.
+  Topology and UVs are unchanged; the hood is weighted 100 % to the head bone (weights are computed after the sculpt).
+  `--no-sculpt` builds the raw scan for comparison.
+- **Texture** — `fal_v3/scripts/v5_tex.py RAW.npz FINAL.npz basecolor_v4.png normal_v4.png OUTDIR` (npz = vertex
+  positions/faces/loop UVs dumped from a `--no-sculpt` and a normal build): hood albedo darkened to near-black charcoal
+  with the fold cavities of the new geometry baked in as soft shading, faint front-crown strip removed, Tripo noise in
+  the normal map flattened on the hood → `basecolor_v5.webp`, `normal_v5.webp` (build defaults).
+Size: 30,036 tris body (+39 from the closed cracks), GLB ≈ 2.2 MB.
+
 ## Procedural build (v1, fallback)
 
 Chibi ninja that replaces the XWAVE X1's look in the game (`RENDER.player` in `src/config.ts`;

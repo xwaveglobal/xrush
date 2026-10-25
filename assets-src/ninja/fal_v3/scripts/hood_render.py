@@ -12,6 +12,17 @@ else:
 for o in list(sc.objects):
     if o.type=='MESH' and o.name!='Ninja_Body': o.hide_render=True
     if o.type in ('CAMERA','LIGHT'): bpy.data.objects.remove(o)
+import os
+if os.environ.get('CLAY'):
+    cm=bpy.data.materials.new('clay'); cm.use_nodes=True
+    b=cm.node_tree.nodes['Principled BSDF']; b.inputs['Base Color'].default_value=(0.6,0.6,0.62,1); b.inputs['Roughness'].default_value=0.6
+    ob=bpy.data.objects['Ninja_Body']; ob.data.materials.clear(); ob.data.materials.append(cm)
+if os.environ.get('NONRM'):
+    for m in bpy.data.materials:
+        if m.use_nodes:
+            for n in m.node_tree.nodes:
+                if n.type=='NORMAL_MAP':
+                    for l in list(n.outputs[0].links): m.node_tree.links.remove(l)
 sc.render.engine='CYCLES'; sc.cycles.samples=32; sc.render.resolution_x=sc.render.resolution_y=res
 sc.render.film_transparent=False
 w=bpy.data.worlds.new('w'); sc.world=w; w.use_nodes=True; w.node_tree.nodes['Background'].inputs[0].default_value=(0.55,0.55,0.55,1)
