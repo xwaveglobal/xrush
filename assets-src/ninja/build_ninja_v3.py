@@ -5,9 +5,10 @@
 #   blender -b --factory-startup -P assets-src/ninja/build_ninja_v3.py -- --blend out.blend --glb out.glb
 #
 # Inputs (assets-src/ninja/fal_v3/):  ninja_v2_textured.glb  textured ~30k tri mesh (glTF, faces +X)
-#                                     basecolor_v5.webp      albedo (v5: near-black hood with baked fold shading, front crown
-#                                                            strip removed; made by scripts/v5_tex.py from basecolor_v4; --basecolor)
-#                                     normal_v5.webp         normal map, scan noise on the hood flattened (--normal, '-' = keep v2)
+#                                     basecolor_v6.webp      albedo (v6: near-black hood, baked AO + fold crease shading, faint
+#                                                            weave; scripts/v6_tex.py from basecolor_v4; v5 kept; --basecolor)
+#                                     normal_v6.webp         normal map: hood fold creases + fabric weave baked (--normal)
+#                                     hood_folds.py          the hood fold field shared by this build and v6_tex.py
 #                                     emit_v3.png            eye-white emission mask
 # v4: hood_sculpt() (soft dome, no back ridge, tip falling back; --no-sculpt to skip), procedural cape
 # keys (cape_keys: hangs down / trails back, side chains pulled in, travelling wave + flutter), extra
@@ -16,6 +17,11 @@
 # analytic gumdrop (piecewise super-ellipsoid + soft tip leaning back, HOOD), Taubin-smoothed (extra on
 # the brim, open borders pinned), a few real cloth folds pressed in. Topology/UVs kept; the hood stays
 # head-rigid via the head weights computed after the sculpt.
+# v6: clearer cloth folds: the hood shell's long edges are split once (14-25 mm scan triangles could not hold
+# folds; tris given back by a light collapse of the lower front body, body stays ~30.5k), the shell is
+# re-smoothed with 3x the passes, folds from fal_v3/hood_folds.py (long folds from the tip down the back and
+# sides, pleats/sags where it bunches into the scarf) are low-passed on the mesh and pressed in, folded-over or
+# pinched faces are relaxed, and the scan's custom normals are reset to smooth on the hood (--no-subdiv to skip).
 # Reused from the previous build (git: build_ninja.py): bone names, the six pose sets, cape helper,
 # in-place baking, the optional accessories (appended from --acc-blend, default: old NinjaCharacter.blend
 # saved as fal_v3/accessories.blend).
@@ -24,6 +30,8 @@
 # 1.0 m tall. glTF export is +Y up / faces +Z, which NinjaRig.ts turns 180 deg.
 import bpy, bmesh, math, os, sys, json, struct
 import numpy as np
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fal_v3'))
+import hood_folds
 from mathutils import Vector, Matrix, Euler, Quaternion
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -90,7 +98,45 @@ for f in [f for f in bm.faces if f not in old_faces]:
         if src:
             lp[uvl].uv = src[0][uvl].uv
 print('[ninja] closed %d small scan cracks around the hood (%d tris)' % (len(small), len([f for f in bm.faces if f not in old_faces])))
+# v6: the hood shell of the scan has 14-25 mm triangles, too coarse to hold cloth folds: split its long edges
+# once (UVs interpolated by bmesh), and give the tris back by a light collapse-decimate of the body below the
+# shoulders (legs, torso under the cape), so the body stays ~30k tris
+if '--no-subdiv' not in argv:
+    _C = Vector((0.0, -0.01, 0.74))
+    def _in_hood(v):
+        d = v.co - _C
+        if v.co.z < 0.60 or d.length < 0.12:
+            return False
+        dn = d.normalized()
+        az = math.degrees(math.atan2(dn.x, -dn.y)); el = math.degrees(math.asin(max(-1, min(1, dn.z))))
+        return math.hypot(az / 45, max(el, 0) / 34) > 0.95
+    # collapse the scan's crumpled micro-triangles on the hood shell first (they fold over once smoothed)
+    hv = set(v for v in bm.verts if _in_hood(v))
+    ne0 = len(bm.edges)
+    bmesh.ops.dissolve_degenerate(bm, dist=0.0032, edges=[e for e in bm.edges if e.verts[0] in hv and e.verts[1] in hv])
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+    print('[ninja] hood micro-edges collapsed: edges %d -> %d' % (ne0, len(bm.edges)))
+    for _pass, lim in enumerate((0.014,)):
+        hv = set(v for v in bm.verts if _in_hood(v))
+        ed = [e for e in bm.edges if e.verts[0] in hv and e.verts[1] in hv and e.calc_length() > lim]
+        nf0 = len(bm.faces)
+        bmesh.ops.subdivide_edges(bm, edges=ed, cuts=1, use_grid_fill=True)
+        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+        print('[ninja] hood subdiv pass %d: %d edges split, faces %d -> %d' % (_pass, len(ed), nf0, len(bm.faces)))
 bm.to_mesh(body.data); bm.free()
+if '--no-subdiv' not in argv:
+    _ntri = len(body.data.polygons)
+    _vg = body.vertex_groups.new(name='_dec')
+    _lo = [v.index for v in body.data.vertices if v.co.z < 0.52 and v.co.y < 0.02]   # front / legs / boots, never the cape sheet
+    _vg.add(_lo, 1.0, 'REPLACE')
+    _target = int(_arg('--tri-budget', '30500'))
+    _ratio = _target / _ntri                       # the modifier ratio is for the whole mesh; the group limits where
+    _md = body.modifiers.new('dec', 'DECIMATE'); _md.decimate_type = 'COLLAPSE'; _md.ratio = max(0.5, min(1.0, _ratio))
+    _md.vertex_group = '_dec'; _md.vertex_group_factor = 1.0; _md.use_collapse_triangulate = True
+    bpy.context.view_layer.objects.active = body; body.select_set(True)
+    bpy.ops.object.modifier_apply(modifier='dec')
+    body.vertex_groups.remove(body.vertex_groups['_dec'])
+    print('[ninja] lower-front-body collapse (ratio %.3f): tris %d -> %d' % (max(0.5, min(1.0, _ratio)), _ntri, len(body.data.polygons)))
 for p in body.data.polygons:
     p.use_smooth = True
 print('[ninja] welded verts %d -> %d' % (n0, len(body.data.vertices)))
@@ -161,40 +207,52 @@ def hood_sculpt(me):
     # smooth: the whole hood (shell, brim, crown front, cowl join), not the face
     m = _ss((Z - 0.60) / 0.04) * (~face)
     m = (relax(m, 2) * pin)[:, None]
-    for _ in range(30):
+    KS = 1 if '--no-subdiv' in argv else 3                      # finer hood mesh (v6 subdiv) needs more passes
+    for _ in range(30 * KS):
         Q += 0.5 * m * lap(Q); Q -= 0.53 * m * lap(Q)
     # the rolled brim around the face opening: extra smoothing (it was wrinkled / cracked in the scan)
     mb = (np.exp(-((rho - 1.1) / 0.28) ** 2) * _ss((Z - 0.70) / 0.05) * pin * (~face))
-    mb = relax(mb, 2)[:, None]
-    for _ in range(40):
+    mb = relax(mb, 2 * KS)[:, None]
+    for _ in range(40 * KS):
         Q += 0.5 * mb * lap(Q); Q -= 0.53 * mb * lap(Q)
     # re-project the fully-dome part once more (smoothing pulled it a little) and blend
     V = Q - C; R = np.linalg.norm(V, axis=1); D = V / np.maximum(R, 1e-9)[:, None]
     Q = Q + (0.8 * w * (hood_target(D) - R))[:, None] * D
     for _ in range(6):
         Q += 0.5 * m * lap(Q); Q -= 0.53 * m * lap(Q)
-    # cloth folds (pressed in along the normal): creases from the tip sweeping down/out over the back,
-    # plus two soft horizontal sags above the cowl
+    # cloth folds (v6, pressed in along the normal): fal_v3/hood_folds.py (shared with the texture bake):
+    # deep folds radiating from the tip down the back and sides, soft creases beside the face opening,
+    # short pleats + sags where the hood bunches into the scarf
     Nn = _vnormals(Q, F)
     V = Q - C; R = np.linalg.norm(V, axis=1); D = V / np.maximum(R, 1e-9)[:, None]
-    fold = np.zeros(n)
-    t = np.array([0, math.sin(math.radians(40)), math.cos(math.radians(40))])
-    for az_, el_, dep, wid in ((35, -5, 0.013, 0.085), (-35, -5, 0.013, 0.085), (65, 10, 0.010, 0.075), (-65, 10, 0.010, 0.075),
-                               (12, -25, 0.008, 0.07), (-18, -22, 0.008, 0.07)):
-        b = np.array([math.sin(math.radians(az_)) * math.cos(math.radians(el_)), math.cos(math.radians(az_)) * math.cos(math.radians(el_)),
-                      math.sin(math.radians(el_))])                    # end direction (azimuth from +Y = back)
-        pn = np.cross(t, b); pn /= np.linalg.norm(pn)
-        dist = np.abs(D @ pn)                                          # angular distance to the great circle t->b
-        u = (D @ b - (D @ t) * (t @ b))                                # crude along-arc parameter: >0 between t and b
-        along = _ss((D @ (b - t * (t @ b)) / np.linalg.norm(b - t * (t @ b))) / 0.25) * _ss((D @ b + 0.2) / 0.3)
-        fold += dep * np.exp(-(dist / wid) ** 2) * along
-    sag = (_ss((Y - 0.02) / 0.05) * (np.exp(-((Z - 0.672) / 0.012) ** 2) * 0.004 + np.exp(-((Z - 0.70) / 0.012) ** 2) * 0.003)
-           * np.exp(-(X / 0.11) ** 2))
-    fold = (fold + sag) * w
-    print('[ninja] hood folds: max %.1f mm, verts > 2 mm: %d' % (1000 * fold.max(), (fold > 0.002).sum()))
+    wf = (outward * _ss((rho - 1.12) / 0.22) * _ss((Z - 0.615) / 0.045) * (~face)
+          * _ss((R / hood_target(D) - 0.80) / 0.08))
+    wf = relax(wf, 2) * pin
+    fold = hood_folds.fold_field(Q) * wf
+    fold = relax(fold, 4)            # low-pass on the mesh: the geometry keeps what ~7 mm edges can hold, the sharp
+                                     # crease line is in the baked normal map (scripts/v6_tex.py, same fold field)
+    print('[ninja] hood folds: max %.1f mm, verts > 2 mm: %d, > 8 mm: %d' % (1000 * fold.max(), (fold > 0.002).sum(), (fold > 0.008).sum()))
     Q = Q - Nn * fold[:, None]
-    for _ in range(2):
-        Q += 0.5 * m * 0.5 * lap(Q); Q -= 0.53 * m * 0.5 * lap(Q)
+    for _ in range(6):
+        Q += 0.5 * m * lap(Q); Q -= 0.53 * m * lap(Q)
+    # untangle: faces folded over (scan layers squeezed onto the same shell) -> plain Laplacian on them + 1 ring;
+    # later rounds also soften faces > ~28 deg off the local smooth normal (fold-start lips, pinches)
+    hz = (_ss((Z - 0.60) / 0.04) * (~face)) > 0.5
+    for it_ in range(6):
+        fnr = np.cross(Q[F[:, 1]] - Q[F[:, 0]], Q[F[:, 2]] - Q[F[:, 0]])
+        fnr /= np.maximum(np.linalg.norm(fnr, axis=1, keepdims=True), 1e-12)
+        vn_ = _vnormals(Q, F)
+        for _ in range(3):
+            acc = np.zeros_like(vn_); np.add.at(acc, E[:, 0], vn_[E[:, 1]]); np.add.at(acc, E[:, 1], vn_[E[:, 0]])
+            vn_ = acc / np.maximum(np.linalg.norm(acc, axis=1, keepdims=True), 1e-12)
+        badf = ((fnr * vn_[F].mean(1)).sum(1) < (0.3 if it_ < 2 else 0.88)) & hz[F].all(1)
+        if not badf.any():
+            break
+        bv = np.zeros(n); bv[F[badf].ravel()] = 1
+        bv = np.clip(relax(bv, 2) * 4, 0, 1)[:, None]
+        for _ in range(8):
+            Q += 0.5 * bv * lap(Q)
+        print('[ninja] hood untangle round %d: %d folded faces' % (it_, badf.sum()))
     for v, q in zip(me.vertices, Q):
         v.co = q
     mv = np.linalg.norm(Q - P, axis=1)
@@ -204,13 +262,28 @@ def hood_sculpt(me):
 HOOD_W = None
 if '--no-sculpt' not in argv:
     HOOD_W = hood_sculpt(body.data)
+# v6: the imported scan carries custom split normals (Tripo noise, and stale where the hood was reshaped /
+# subdivided): on the hood they are replaced by the true smooth normals of the new surface, blended out below it
+if '--no-sculpt' not in argv:
+    _me = body.data
+    _ln = np.array([c.vector[:] for c in _me.corner_normals])
+    _vn = np.array([v.vector[:] for v in _me.vertex_normals])
+    _co = np.array([v.co[:] for v in _me.vertices])
+    _face = (_co[:, 1] < -0.10) & (np.abs(_co[:, 0]) < 0.135) & (_co[:, 2] < 0.87) & (_co[:, 2] > 0.58)
+    _hm = _ss((_co[:, 2] - 0.60) / 0.04) * (~_face)
+    _lv = np.array([l.vertex_index for l in _me.loops])
+    _w = _hm[_lv][:, None]
+    _nl = _ln * (1 - _w) + _vn[_lv] * _w
+    _nl /= np.maximum(np.linalg.norm(_nl, axis=1, keepdims=True), 1e-9)
+    _me.normals_split_custom_set([tuple(x) for x in _nl])
+    print('[ninja] hood normals: %d corners reset to smooth' % int((_w[:, 0] > 0.5).sum()))
 
 # material: swap in the v3 albedo, eye-white emission
 mat = body.data.materials[0]; mat.name = 'Ninja_Fal'
 nt = mat.node_tree; N = nt.nodes; Lk = nt.links
 bsdf = [n for n in N if n.type == 'BSDF_PRINCIPLED'][0]
 bc_node = bsdf.inputs['Base Color'].links[0].from_node
-img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v5.webp')))
+img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v6.webp')))
 img.name = 'ninja_basecolor'; img.alpha_mode = 'STRAIGHT'
 old = bc_node.image
 bc_node.image = img
@@ -219,7 +292,7 @@ if old and old.users == 0:
 if not bsdf.inputs['Alpha'].is_linked:
     Lk.new(bc_node.outputs['Alpha'], bsdf.inputs['Alpha'])
 em = N.new('ShaderNodeTexImage'); em.image = bpy.data.images.load(os.path.join(SRC, _arg('--emit-tex', 'emit_v3.png'))); em.image.name = 'ninja_emit'
-NRM = _arg('--normal', 'normal_v5.webp')
+NRM = _arg('--normal', 'normal_v6.webp')
 if NRM != '-':
     for n_ in N:
         if n_.type == 'TEX_IMAGE' and n_.image and 'normal' in n_.image.name.lower():
@@ -397,7 +470,7 @@ cc = c_cape[cm][:, None]
 W[cm] = Wb * (1 - cc) + Wc * cc
 # 2) head + hood rigid (blend over the cowl)
 h = sstep((Z - 0.595) / 0.05)
-h[(Z > 0.56) & (np.abs(X) > 0.19)] = 0                 # shoulders never follow the head
+h[(Z > 0.56) & (Z < 0.66) & (np.abs(X) > 0.19)] = 0     # shoulders never follow the head (the hood sides above do)
 W *= (1 - h)[:, None]
 W[:, col['head']] += h
 # 2b) v4: extra local relaxation at the worst stretch spots found with stretch.py (shoulder/collar join,

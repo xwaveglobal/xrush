@@ -1,6 +1,6 @@
 # Ninja player character
 
-**Current asset (v4 = v3 pipeline + fixes):** the in-game `src/assets/models/ninja.glb` is the scanned-from-references model built by
+**Current asset (v6 = v3 pipeline + v4/v5/v6 fixes):** the in-game `src/assets/models/ninja.glb` is the scanned-from-references model built by
 `build_ninja_v3.py` (see "v3 pipeline" below). The older fully procedural build (`build_ninja.py`, described
 after it) is kept as a fallback and as the source of the optional accessory meshes.
 
@@ -65,6 +65,24 @@ Size: 29,997 tris body (+1,100 hand prop / +332 dagger, hidden by default), GLB 
   with the fold cavities of the new geometry baked in as soft shading, faint front-crown strip removed, Tripo noise in
   the normal map flattened on the hood → `basecolor_v5.webp`, `normal_v5.webp` (build defaults).
 Size: 30,036 tris body (+39 from the closed cracks), GLB ≈ 2.2 MB.
+
+### v6 hood cloth folds (no extra fal spend)
+- **Hood density** — the scan's hood triangles (14–25 mm) were too coarse to carry folds: micro-edges < 3.2 mm are
+  collapsed, hood edges > 14 mm are split once, and the tris are paid back by collapse-decimating the lower front body
+  (z < 0.52, y < 0.02; cape excluded) to a fixed budget (`--tri-budget`, default 30,500; `--no-subdiv` to skip).
+- **Fold field** — `fal_v3/hood_folds.py` (shared by the build and the texture bake): 7 long main folds radiating from
+  the tip down the back/sides, 4 soft creases by the face opening, 7 short bunching pleats where the hood meets the
+  scarf, plus two shallow horizontal sags. Each fold is a Gaussian groove around a great-circle arc with tapered ends.
+  The build presses the low-passed field in along the normals (max ≈ 21 mm, deep folds ≈ 8–20 mm) on top of the v5
+  gumdrop, then Taubin-smooths and runs an untangle pass (flipped / badly bent faces), and resets the hood's custom
+  split normals to smooth normals. Silhouette stays the v5 gumdrop; the hood is still 100 % on the head bone (the
+  shoulder exclusion now only applies below z 0.66 so the widest hood sides stay head-rigid).
+- **Texture** — `blender -b NinjaCharacter.blend -P fal_v3/scripts/dump_ao.py -- final_ao.npz` (mesh + 48-ray AO), then
+  `python fal_v3/scripts/v6_tex.py final_ao.npz basecolor_v4.png normal_v4.png OUTDIR` (v4 webps as PNG): per-texel raster of the final
+  mesh; near-black albedo with baked AO, sharp crease/cavity darkening, ridge lift and a faint weave; tangent-space
+  normal map from the crease + weave/slub height field (face creases are mostly texture) → `basecolor_v6.webp`,
+  `normal_v6.webp` (build defaults).
+Size: 30,500 tris body (lower front body ≈ 18 % decimated to pay for the hood), GLB ≈ 2.25 MB.
 
 ## Procedural build (v1, fallback)
 
