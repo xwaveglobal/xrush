@@ -1,6 +1,6 @@
 # Ninja player character
 
-**Current asset (v3):** the in-game `src/assets/models/ninja.glb` is the scanned-from-references model built by
+**Current asset (v4 = v3 pipeline + fixes):** the in-game `src/assets/models/ninja.glb` is the scanned-from-references model built by
 `build_ninja_v3.py` (see "v3 pipeline" below). The older fully procedural build (`build_ninja.py`, described
 after it) is kept as a fallback and as the source of the optional accessory meshes.
 
@@ -36,6 +36,20 @@ How the inputs were made (one-off; scripts in `fal_v3/scripts/`, paths inside ar
    `Ninja_Fal` alpha MASK 0.5, double-sided, eye whites emissive 0.45.
 
 fal cost for the whole v3 asset: about **$1.15** (Nano Banana Pro edits + Tripo multiview HD runs).
+
+### v4 fixes (same pipeline, no extra fal spend)
+- **Texture** — `fal_v3/scripts/v4_tex.py` (from `basecolor_v3` + the v2 normal map, using `texpos`):
+  hood back seam/crease and streak leftovers removed (kNN cloth colour + high-pass detail + soft fold shading),
+  normal map flattened on the seam (`normal_v4.webp`), exposed skin cut to the nose/cheek band and made more
+  neutral, chin + scarf-top wraps continued from the scarf → `basecolor_v4.webp`.
+- **Hood sculpt** — `hood_sculpt()` in `build_ninja_v3.py`: masked Taubin smoothing of the back ridge / crown,
+  back bulge flattened ~22 %, tip pulled back and slightly down; the hood stays 100 % on the head bone.
+- **Cape** — `CAPE_MOTION` / `cape_keys()`: the cape bones are keyed every 2 frames procedurally; it hangs down and
+  trails back (total lift ≈ 30° Run, 40–54° Jump/Fall, settling to ≈ 5° in Land), the side chains swing inward as
+  they lift (`CAPE_IN`), so from behind it stays about shoulder wide (no "wings"). `fal_v3/scripts/measure.py`
+  prints the cape width per clip.
+- **Weights** — extra local relaxation (edge + spatial) at the stretch hot spots (`HOT`: collar/shoulder join,
+  chest strap buckle, cape hem corners).
 Size: 29,997 tris body (+1,100 hand prop / +332 dagger, hidden by default), GLB ≈ 2.2 MB.
 
 ## Procedural build (v1, fallback)

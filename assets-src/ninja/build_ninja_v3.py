@@ -5,8 +5,12 @@
 #   blender -b --factory-startup -P assets-src/ninja/build_ninja_v3.py -- --blend out.blend --glb out.glb
 #
 # Inputs (assets-src/ninja/fal_v3/):  ninja_v2_textured.glb  textured ~30k tri mesh (glTF, faces +X)
-#                                     basecolor_v3.webp      fixed albedo (hood streak, eyes, skin)
+#                                     basecolor_v4.webp      albedo (v4: hood back seam/crease, face band, scarf; --basecolor)
+#                                     normal_v4.webp         normal map with the hood seam flattened (--normal, '-' = keep v2)
 #                                     emit_v3.png            eye-white emission mask
+# v4: hood_sculpt() (soft dome, no back ridge, tip falling back; --no-sculpt to skip), procedural cape
+# keys (cape_keys: hangs down / trails back, side chains pulled in, travelling wave + flutter), extra
+# local weight relaxation at the stretch hot spots (HOT).
 # Reused from the previous build (git: build_ninja.py): bone names, the six pose sets, cape helper,
 # in-place baking, the optional accessories (appended from --acc-blend, default: old NinjaCharacter.blend
 # saved as fal_v3/accessories.blend).
@@ -57,12 +61,56 @@ for p in body.data.polygons:
     p.use_smooth = True
 print('[ninja] welded verts %d -> %d' % (n0, len(body.data.vertices)))
 
+# ----------------------------------------------------------------------------------------------
+# hood sculpt (v4): smooth the vertical ridge / lumps down the back, flatten the bulge, soft tip that
+# falls back and down. Only vertices above the scarf (z > 0.62) on the back half move.
+# ----------------------------------------------------------------------------------------------
+def _ss(t):
+    t = np.clip(t, 0, 1); return t * t * (3 - 2 * t)
+def hood_sculpt(me):
+    P = np.array([v.co[:] for v in me.vertices])
+    E = np.array([e.vertices[:] for e in me.edges])
+    n = len(P)
+    deg = np.bincount(E.ravel(), minlength=n).astype(float)
+    def lap(Q):
+        acc = np.zeros_like(Q)
+        np.add.at(acc, E[:, 0], Q[E[:, 1]]); np.add.at(acc, E[:, 1], Q[E[:, 0]])
+        return acc / np.maximum(deg, 1)[:, None] - Q
+    X, Y, Z = P.T
+    back = _ss((Y - 0.0) / 0.05) * _ss((Z - 0.64) / 0.05)
+    top = _ss((Z - 0.88) / 0.04) * _ss((Y + 0.15) / 0.03)    # the seam also runs over the crown to the brim
+    ridge = np.exp(-(X / 0.04) ** 2) * np.maximum(back, top)
+    m = np.clip(np.maximum(ridge, 0.6 * back), 0, 1)[:, None]
+    Q = P.copy()
+    for _ in range(40):                      # Taubin: smooth without shrinking
+        Q += 0.5 * m * lap(Q)
+        Q -= 0.53 * m * lap(Q)
+    X, Y, Z = Q.T
+    # flatten the back bulge (max at z ~ 0.73)
+    g = np.exp(-((Z - 0.75) / 0.09) ** 2) * _ss((Z - 0.64) / 0.04)
+    Y2 = np.where(Y > 0.05, 0.05 + (Y - 0.05) * (1 - 0.22 * g), Y)
+    # soft tip: pull the crown back and a little down, strongest at the top-back
+    r = np.sqrt(X ** 2 + (Y - 0.03) ** 2 + (Z - 0.975) ** 2)
+    t = np.exp(-(r / 0.075) ** 2) * _ss((Y + 0.06) / 0.08)
+    Y2 = Y2 + 0.032 * t
+    Z2 = Z - 0.016 * t * _ss((Y + 0.02) / 0.06)
+    Q = np.c_[X, Y2, Z2]
+    m2 = (_ss((Z - 0.80) / 0.05) * _ss((Y + 0.05) / 0.05))[:, None]
+    for _ in range(8):
+        Q += 0.5 * m2 * lap(Q); Q -= 0.53 * m2 * lap(Q)
+    for v, q in zip(me.vertices, Q):
+        v.co = q
+    print('[ninja] hood sculpt: max move %.1f mm, back max y %.3f -> %.3f' % (
+        1000 * np.linalg.norm(Q - P, axis=1).max(), P[P[:, 2] > 0.64, 1].max(), Q[Q[:, 2] > 0.64, 1].max()))
+if '--no-sculpt' not in argv:
+    hood_sculpt(body.data)
+
 # material: swap in the v3 albedo, eye-white emission
 mat = body.data.materials[0]; mat.name = 'Ninja_Fal'
 nt = mat.node_tree; N = nt.nodes; Lk = nt.links
 bsdf = [n for n in N if n.type == 'BSDF_PRINCIPLED'][0]
 bc_node = bsdf.inputs['Base Color'].links[0].from_node
-img = bpy.data.images.load(os.path.join(SRC, 'basecolor_v3.webp'))
+img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v4.webp')))
 img.name = 'ninja_basecolor'; img.alpha_mode = 'STRAIGHT'
 old = bc_node.image
 bc_node.image = img
@@ -70,7 +118,15 @@ if old and old.users == 0:
     bpy.data.images.remove(old)
 if not bsdf.inputs['Alpha'].is_linked:
     Lk.new(bc_node.outputs['Alpha'], bsdf.inputs['Alpha'])
-em = N.new('ShaderNodeTexImage'); em.image = bpy.data.images.load(os.path.join(SRC, 'emit_v3.png')); em.image.name = 'ninja_emit'
+em = N.new('ShaderNodeTexImage'); em.image = bpy.data.images.load(os.path.join(SRC, _arg('--emit-tex', 'emit_v3.png'))); em.image.name = 'ninja_emit'
+NRM = _arg('--normal', 'normal_v4.webp')
+if NRM != '-':
+    for n_ in N:
+        if n_.type == 'TEX_IMAGE' and n_.image and 'normal' in n_.image.name.lower():
+            o_ = n_.image; n_.image = bpy.data.images.load(os.path.join(SRC, NRM)); n_.image.name = 'ninja_normal'
+            n_.image.colorspace_settings.name = 'Non-Color'
+            if o_.users == 0:
+                bpy.data.images.remove(o_)
 Lk.new(em.outputs['Color'], bsdf.inputs['Emission Color'])
 bsdf.inputs['Emission Strength'].default_value = EMIT
 try:
@@ -244,6 +300,36 @@ h = sstep((Z - 0.595) / 0.05)
 h[(Z > 0.56) & (np.abs(X) > 0.19)] = 0                 # shoulders never follow the head
 W *= (1 - h)[:, None]
 W[:, col['head']] += h
+# 2b) v4: extra local relaxation at the worst stretch spots found with stretch.py (shoulder/collar join,
+#     upper-coat seam, chest strap buckle, cape hem corners); mirrored in X, never inside the rigid head
+HOT = [(0.155, 0.05, 0.565, 0.035), (0.13, 0.05, 0.57, 0.03), (0.095, 0.051, 0.484, 0.025), (0.12, 0.012, 0.493, 0.025),
+       (0.02, -0.11, 0.48, 0.025), (0.15, 0.02, 0.377, 0.025), (0.12, 0.16, 0.19, 0.03), (0.118, 0.154, 0.217, 0.025),
+       (0.105, 0.035, 0.515, 0.025), (0.022, -0.112, 0.377, 0.025), (0.08, -0.09, 0.51, 0.025),
+       (0.10, -0.076, 0.515, 0.03), (0.0, -0.122, 0.448, 0.02), (0.157, 0.06, 0.543, 0.03)]
+mh = np.zeros(nv)
+for hx, hy, hz, hr in HOT:
+    for sx in (1, -1):
+        d2 = (X - sx * hx) ** 2 + (Y - hy) ** 2 + (Z - hz) ** 2
+        mh = np.maximum(mh, np.exp(-d2 / hr ** 2))
+mh *= (1 - h)
+mh = mh[:, None]
+for _ in range(12):
+    acc = np.zeros_like(W)
+    np.add.at(acc, EI[:, 0], W[EI[:, 1]]); np.add.at(acc, EI[:, 1], W[EI[:, 0]])
+    W = np.where(deg > 0, (1 - 0.6 * mh) * W + 0.6 * mh * acc / np.maximum(deg, 1), W)
+# ... plus a spatial pass (layers that touch but share no edges: strap over coat, buckle over belt)
+from mathutils.kdtree import KDTree
+kd = KDTree(nv)
+for i in range(nv):
+    kd.insert(P[i], i)
+kd.balance()
+hot_i = np.nonzero(mh[:, 0] > 0.05)[0]
+NB = [np.array([j for (_, j, _) in kd.find_range(P[i], 0.012)]) for i in hot_i]
+for _ in range(4):
+    Wn = W.copy()
+    for i, nb in zip(hot_i, NB):
+        Wn[i] = (1 - 0.6 * mh[i, 0]) * W[i] + 0.6 * mh[i, 0] * W[nb].mean(0)
+    W = Wn
 # 3) clean: drop < 0.02, max 4 influences, normalise
 W[W < 0.02] = 0
 o = np.argsort(-W, 1)
@@ -356,6 +442,46 @@ SLIDE_A = merge({'thigh.L': (-86, -4, 0), 'shin.L': (6, 0, 0), 'foot.L': (24, 0,
                  'upper_arm.L': (-36, -28, 0), 'upper_arm.R': (40, 12, 0), 'forearm.L': (-24, 0, 0), 'forearm.R': (-10, 0, 0)}, cape(52, 14, 10, 3, 14))
 SLIDE_B = merge(SLIDE_A, {'spine': (-23, 0, 0), 'head': (18, 0, 0), 'upper_arm.L': (-40, -32, 0)}, cape(58, 18, 14, -3, 18))
 
+# ----------------------------------------------------------------------------------------------
+# cape motion (v4): the cape hangs DOWN and trails BACK (+Y), side chains pulled in toward the centre
+# as it lifts so the silhouette from behind stays about shoulder wide; travelling wave down the chain
+# (each level lags) + a faster small flutter. Cyclic clips are exactly periodic.
+# angles (deg) are in armature space: X+ swings the hem back, Y+ moves a hanging bone toward -X.
+# ----------------------------------------------------------------------------------------------
+def _lerp_keys(kf, f):
+    for (f0, v0), (f1, v1) in zip(kf, kf[1:]):
+        if f0 <= f <= f1:
+            t = (f - f0) / max(f1 - f0, 1e-6); t = t * t * (3 - 2 * t)
+            return v0 + (v1 - v0) * t
+    return kf[-1][1]
+CAPE_MOTION = {   # lift: total trail-back angle (deg) over frame keys; wave / flutter amplitude (deg); cycles per clip
+    'Idle':  dict(lift=[(0, 5), (24, 7), (48, 5)], wave=1.5, flut=0.8, k=1, kf=2),
+    'Run':   dict(lift=[(0, 30), (16, 30)], wave=4.0, flut=2.5, k=1, kf=2, sway=3.0),
+    'Jump':  dict(lift=[(0, 5), (4, 3), (8, 22), (14, 38), (18, 42)], wave=3.0, flut=2.5, k=1, kf=2),
+    'Fall':  dict(lift=[(0, 50), (12, 54), (24, 50)], wave=5.0, flut=3.5, k=1, kf=3),
+    'Land':  dict(lift=[(0, 50), (3, 40), (9, 14), (14, 1), (20, 7)], wave=2.5, flut=1.5, k=1, kf=2, decay=True),
+    'Slide': dict(lift=[(0, 84), (8, 90), (16, 84)], wave=4.0, flut=3.0, k=1, kf=2),
+}
+CAPE_SPLIT = (0.46, 0.32, 0.22)       # share of the lift per level (top..hem)
+CAPE_IN = 0.45                        # side chains: inward swing per degree of their lift
+def cape_keys(act, f, T):
+    m = CAPE_MOTION[act]
+    lift = _lerp_keys(m['lift'], f)
+    ph = 2 * math.pi * f / max(T, 1)
+    amp = (1 - 0.7 * f / max(T, 1)) if m.get('decay') else 1.0
+    out = {}
+    for col, w in (('C', 0.0), ('L', 1.0), ('R', -1.0)):
+        for i in range(3):
+            lag = 0.9 * (i + 1) + 0.6 * w           # wave runs down the chain; the edges a bit out of phase
+            a = lift * CAPE_SPLIT[i] * (1 - 0.12 * abs(w))
+            a += amp * m['wave'] * (0.5 + 0.35 * i) * math.sin(m['k'] * ph - lag)
+            a += amp * m['flut'] * (0.3 + 0.45 * i) * math.sin(m['kf'] * ph - 1.3 * lag + (0.8 * w))
+            sway = m.get('sway', 0.0) * math.sin(ph - 0.7 * i)          # follows the hips in Run
+            inward = w * CAPE_IN * max(a, 0.0)                            # keep the edges in behind the body
+            twist = w * 0.6 * amp * m['flut'] * math.sin(m['kf'] * ph - lag)
+            out['cape_%s%d' % (col, i + 1)] = (a, inward + sway * (1 if i == 0 else 0.5), twist)
+    return out
+
 ACTIONS = [
     ('Idle', [(0, STAND), (24, IDLE_B), (48, STAND)]),
     ('Run', [(0, RUN_C), (4, RUN_P), (8, mirror_pose(RUN_C)), (12, mirror_pose(RUN_P)), (16, RUN_C)]),
@@ -426,6 +552,16 @@ for name, keys in ACTIONS:
             prev[pb.name] = q
             pb.keyframe_insert('rotation_quaternion', frame=f, group=pb.name)
         PB['hips'].keyframe_insert('location', frame=f, group='hips')
+    # v4: the cape bones get their own keys every 2 frames (overriding the pose-set values above)
+    T = keys[-1][0]
+    for f in range(0, T + 1, 2):
+        for n_, e_ in cape_keys(name, f, T).items():
+            q = to_local(n_, Euler([math.radians(a) for a in e_], 'XYZ').to_matrix())
+            if n_ in prev and prev[n_].dot(q) < 0:
+                q.negate()
+            prev[n_] = q
+            PB[n_].rotation_quaternion = q
+            PB[n_].keyframe_insert('rotation_quaternion', frame=f, group=n_)
     act.use_frame_range = True
     act.frame_start, act.frame_end = 0, keys[-1][0]
     act.use_cyclic = name in ('Idle', 'Run', 'Fall', 'Slide')
