@@ -47,7 +47,7 @@ cam_d.lens = 85
 target = Vector((0, 0, 0.5))
 VIEW_POS = {'front': (0, -3.2, 0.55), 'back': (0, 3.2, 0.55), 'left': (3.2, 0, 0.55), 'right': (-3.2, 0, 0.55),
             'top': (0.0, -0.02, 3.4), 'gameplay_angle': (0.0, 2.6, 1.55), 'three_quarter': (2.0, -2.4, 1.0),
-            'back_34': (-1.0, 2.7, 1.25), 'front_34': (-2.2, -2.3, 0.9)}
+            'back_34': (-1.0, 2.7, 1.25), 'front_34': (-2.2, -2.3, 0.9), 'side_r': (-3.2, 0.4, 0.8)}
 def aim(pos, tgt=target, lens=85):
     cam.location = pos
     cam.rotation_euler = (tgt - Vector(pos)).to_track_quat('-Z', 'Y').to_euler()
@@ -75,7 +75,7 @@ if '--anim' not in argv:
         print('[render]', sc.render.filepath)
 else:
     sc.render.resolution_x = sc.render.resolution_y = int(arg('--res', '360'))
-    aim(VIEW_POS['three_quarter'], Vector((0, 0, 0.45)), 70)
+    aim(VIEW_POS[arg('--animview', 'three_quarter')], Vector((0, 0, 0.45)), 70)
     for name in ('Idle', 'Run', 'Jump', 'Fall', 'Land', 'Slide'):
         a = bpy.data.actions[name]
         end = int(a.frame_range[1])

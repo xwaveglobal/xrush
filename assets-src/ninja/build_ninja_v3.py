@@ -1,0 +1,487 @@
+# Ninja player character v3 for xrush: the fal.ai (nano-banana-pro views -> Tripo v2.5 multiview) mesh,
+# texture-fixed (fal_v3/basecolor_v3.webp), rigged + animated here, exported for the game.
+#
+#   blender -b --factory-startup -P assets-src/ninja/build_ninja_v3.py
+#   blender -b --factory-startup -P assets-src/ninja/build_ninja_v3.py -- --blend out.blend --glb out.glb
+#
+# Inputs (assets-src/ninja/fal_v3/):  ninja_v2_textured.glb  textured ~30k tri mesh (glTF, faces +X)
+#                                     basecolor_v3.webp      fixed albedo (hood streak, eyes, skin)
+#                                     emit_v3.png            eye-white emission mask
+# Reused from the previous build (git: build_ninja.py): bone names, the six pose sets, cape helper,
+# in-place baking, the optional accessories (appended from --acc-blend, default: old NinjaCharacter.blend
+# saved as fal_v3/accessories.blend).
+#
+# Units: metres, Blender axes (Z up, the character faces -Y, its left hand on +X), feet on z = 0,
+# 1.0 m tall. glTF export is +Y up / faces +Z, which NinjaRig.ts turns 180 deg.
+import bpy, bmesh, math, os, sys, json, struct
+import numpy as np
+from mathutils import Vector, Matrix, Euler, Quaternion
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
+SRC = os.path.join(HERE, 'fal_v3')
+argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
+def _arg(k, d):
+    return argv[argv.index(k) + 1] if k in argv else d
+OUT_BLEND = _arg('--blend', os.path.join(HERE, 'NinjaCharacter.blend'))
+OUT_GLB = _arg('--glb', os.path.join(REPO, 'src', 'assets', 'models', 'ninja.glb'))
+ACC_BLEND = _arg('--acc-blend', os.path.join(SRC, 'accessories.blend'))
+FPS = 30
+EMIT = float(_arg('--emit', '0.45'))
+
+bpy.ops.wm.read_factory_settings(use_empty=True)
+scene = bpy.context.scene
+scene.render.fps = FPS
+coll = scene.collection
+
+# ----------------------------------------------------------------------------------------------
+# mesh: import, orient (+X -> -Y), feet on z = 0, weld UV-seam duplicates (UVs live on loops)
+# ----------------------------------------------------------------------------------------------
+bpy.ops.import_scene.gltf(filepath=os.path.join(SRC, 'ninja_v2_textured.glb'))
+body = [o for o in scene.objects if o.type == 'MESH'][0]
+for o in list(scene.objects):
+    if o is not body:
+        bpy.data.objects.remove(o)
+body.parent = None
+body.name = 'Ninja_Body'; body.data.name = 'Ninja_Body'
+mw = Matrix.Rotation(math.radians(-90), 4, 'Z') @ body.matrix_world
+body.data.transform(mw)
+body.matrix_world = Matrix.Identity(4)
+co = np.array([v.co[:] for v in body.data.vertices])
+body.data.transform(Matrix.Translation((-0.5 * (co[:, 0].max() + co[:, 0].min()), 0, -co[:, 2].min())))
+bm = bmesh.new(); bm.from_mesh(body.data)
+n0 = len(bm.verts)
+bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=0.0004)
+bm.to_mesh(body.data); bm.free()
+for p in body.data.polygons:
+    p.use_smooth = True
+print('[ninja] welded verts %d -> %d' % (n0, len(body.data.vertices)))
+
+# material: swap in the v3 albedo, eye-white emission
+mat = body.data.materials[0]; mat.name = 'Ninja_Fal'
+nt = mat.node_tree; N = nt.nodes; Lk = nt.links
+bsdf = [n for n in N if n.type == 'BSDF_PRINCIPLED'][0]
+bc_node = bsdf.inputs['Base Color'].links[0].from_node
+img = bpy.data.images.load(os.path.join(SRC, 'basecolor_v3.webp'))
+img.name = 'ninja_basecolor'; img.alpha_mode = 'STRAIGHT'
+old = bc_node.image
+bc_node.image = img
+if old and old.users == 0:
+    bpy.data.images.remove(old)
+if not bsdf.inputs['Alpha'].is_linked:
+    Lk.new(bc_node.outputs['Alpha'], bsdf.inputs['Alpha'])
+em = N.new('ShaderNodeTexImage'); em.image = bpy.data.images.load(os.path.join(SRC, 'emit_v3.png')); em.image.name = 'ninja_emit'
+Lk.new(em.outputs['Color'], bsdf.inputs['Emission Color'])
+bsdf.inputs['Emission Strength'].default_value = EMIT
+try:
+    mat.blend_method = 'CLIP'; mat.alpha_threshold = 0.5
+except Exception:
+    pass
+mat.use_backface_culling = False
+
+# ----------------------------------------------------------------------------------------------
+# armature (same bone names as build_ninja.py; joints fitted to this mesh)
+# ----------------------------------------------------------------------------------------------
+SH = {s: Vector((0.155 * s, 0.0, 0.535)) for s in (1, -1)}
+ELB = {s: Vector((0.222 * s, 0.0, 0.468)) for s in (1, -1)}
+WRI = {s: Vector((0.262 * s, -0.015, 0.405)) for s in (1, -1)}
+HTIP = {s: Vector((0.298 * s, -0.02, 0.335)) for s in (1, -1)}
+HIPJ = {s: Vector((0.085 * s, -0.02, 0.335)) for s in (1, -1)}
+KNEE = {s: Vector((0.09 * s, -0.03, 0.215)) for s in (1, -1)}
+ANK = {s: Vector((0.09 * s, -0.005, 0.085)) for s in (1, -1)}
+TOE = {s: Vector((0.095 * s, -0.10, 0.02)) for s in (1, -1)}
+# rest directions of the previous (procedural) rig, used to carry its poses over
+OLD_ARM = math.radians(40)
+OLD_DIR = {}
+for s, sd in ((1, 'L'), (-1, 'R')):
+    a = Vector((math.cos(OLD_ARM) * s, 0.0, -math.sin(OLD_ARM)))
+    OLD_DIR['upper_arm.' + sd] = OLD_DIR['forearm.' + sd] = OLD_DIR['hand.' + sd] = a
+    OLD_DIR['thigh.' + sd] = (Vector((0.068 * s, -0.005, 0.178)) - Vector((0.064 * s, 0, 0.272))).normalized()
+    OLD_DIR['shin.' + sd] = (Vector((0.07 * s, 0, 0.098)) - Vector((0.068 * s, -0.005, 0.178))).normalized()
+    OLD_DIR['foot.' + sd] = (Vector((0.072 * s, -0.105, 0.03)) - Vector((0.07 * s, 0, 0.098))).normalized()
+ARM_LIFT = math.radians(10)   # bulkier coat than the old body: keep the hanging arms ~10 deg further out
+
+CAPE_TOP = 0.545
+CAPE = {   # column -> 4 points top..hem (left column on +X; R mirrors it)
+    'C': [(0, 0.075, CAPE_TOP), (0, 0.10, 0.40), (0, 0.125, 0.26), (0, 0.20, 0.11)],
+    'L': [(0.13, 0.06, 0.53), (0.185, 0.085, 0.40), (0.225, 0.105, 0.27), (0.252, 0.12, 0.15)],
+}
+CAPE['R'] = [(-x, y, z) for x, y, z in CAPE['L']]
+
+arm = bpy.data.armatures.new('Ninja_Rig')
+rig = bpy.data.objects.new('Ninja_Rig', arm)
+coll.objects.link(rig)
+bpy.context.view_layer.objects.active = rig
+bpy.ops.object.mode_set(mode='EDIT')
+def eb(name, h, t, parent=None, deform=True):
+    b = arm.edit_bones.new(name)
+    b.head, b.tail = Vector(h), Vector(t)
+    b.use_deform = deform
+    if parent:
+        b.parent = arm.edit_bones[parent]; b.use_connect = False
+    return b
+eb('root', (0, 0, 0), (0, 0, 0.08), deform=False)
+eb('hips', (0, -0.02, 0.30), (0, -0.02, 0.40), 'root')
+eb('spine', (0, -0.02, 0.40), (0, -0.02, 0.47), 'hips')
+eb('chest', (0, -0.02, 0.47), (0, -0.02, 0.555), 'spine')
+eb('neck', (0, -0.02, 0.555), (0, -0.02, 0.62), 'chest')
+eb('head', (0, -0.02, 0.62), (0, -0.02, 1.0), 'neck')
+for s, sd in ((1, 'L'), (-1, 'R')):
+    eb('upper_arm.' + sd, SH[s], ELB[s], 'chest')
+    eb('forearm.' + sd, ELB[s], WRI[s], 'upper_arm.' + sd)
+    eb('hand.' + sd, WRI[s], HTIP[s], 'forearm.' + sd)
+    eb('thigh.' + sd, HIPJ[s], KNEE[s], 'hips')
+    eb('shin.' + sd, KNEE[s], ANK[s], 'thigh.' + sd)
+    eb('foot.' + sd, ANK[s], TOE[s], 'shin.' + sd)
+for k, pts in CAPE.items():
+    par = 'chest'
+    for i in range(3):
+        nm = 'cape_%s%d' % (k, i + 1)
+        eb(nm, pts[i], pts[i + 1], par); par = nm
+bpy.ops.object.mode_set(mode='OBJECT')
+SEG = {b.name: (b.head_local.copy(), b.tail_local.copy()) for b in arm.bones}
+CAPE_BONES = [b.name for b in arm.bones if b.name.startswith('cape_')]
+BODY_BONES = [b.name for b in arm.bones if b.use_deform and not b.name.startswith('cape_')]
+
+# ----------------------------------------------------------------------------------------------
+# skin weights: automatic (bone heat) on the body bones, then fixed up:
+#   head + hood rigid on 'head'; cape on the cape chains (never on legs / arms); no unweighted verts
+# ----------------------------------------------------------------------------------------------
+for b in arm.bones:
+    b.use_deform = b.name in BODY_BONES
+bpy.ops.object.select_all(action='DESELECT')
+body.select_set(True); rig.select_set(True)
+bpy.context.view_layer.objects.active = rig
+bpy.ops.object.parent_set(type='ARMATURE_AUTO')
+for b in arm.bones:
+    b.use_deform = b.name != 'root'
+nv = len(body.data.vertices)
+names = BODY_BONES + CAPE_BONES
+col = {n: i for i, n in enumerate(names)}
+W = np.zeros((nv, len(names)))
+gidx = {g.index: g.name for g in body.vertex_groups}
+for v in body.data.vertices:
+    for g in v.groups:
+        n = gidx[g.group]
+        if n in col:
+            W[v.index, col[n]] = g.weight
+P = np.array([v.co[:] for v in body.data.vertices])
+X, Y, Z = P[:, 0], P[:, 1], P[:, 2]
+def sstep(t):
+    t = np.clip(t, 0, 1); return t * t * (3 - 2 * t)
+def seg_d(Q, a, b):
+    a = np.array(a); b = np.array(b); ab = b - a
+    t = np.clip(((Q - a) @ ab) / (ab @ ab), 0, 1)
+    return np.linalg.norm(Q - (a + t[:, None] * ab), axis=1)
+def dist_w(Q, bones, k=3, rad=0.05):
+    D = np.stack([seg_d(Q, *SEG[n]) for n in bones], 1) / rad
+    Wd = 1.0 / (D * D + 0.02) ** 2
+    if k < len(bones):
+        thr = np.sort(Wd, 1)[:, -k][:, None]; Wd = np.where(Wd >= thr, Wd, 0)
+    return Wd / Wd.sum(1, keepdims=True)
+# 0) verts the heat solver missed -> distance weights on the body bones
+miss = W.sum(1) < 0.3
+if miss.any():
+    W[miss, :len(BODY_BONES)] = dist_w(P[miss], BODY_BONES, 3, 0.06)
+print('[ninja] auto-weights missed %d verts (distance fallback)' % miss.sum())
+W /= np.maximum(W.sum(1, keepdims=True), 1e-9)
+# 0b) heat weights jump between stacked layers (cowl over shoulder, coat over belt): relax along edges
+EI = np.array([e.vertices[:] for e in body.data.edges])
+deg = np.bincount(EI.ravel(), minlength=nv).astype(float)[:, None]
+for _ in range(6):
+    acc = np.zeros_like(W)
+    np.add.at(acc, EI[:, 0], W[EI[:, 1]]); np.add.at(acc, EI[:, 1], W[EI[:, 0]])
+    W = np.where(deg > 0, 0.5 * W + 0.5 * acc / np.maximum(deg, 1), W)
+for sd, sg in (('L', 1), ('R', -1)):                 # arms never pull the spine line
+    k = sstep((X * sg - 0.10) / 0.06)
+    for b in ('upper_arm', 'forearm', 'hand'):
+        W[:, col[b + '.' + sd]] *= k
+lo = W.sum(1) < 0.3
+if lo.any():
+    tw = dist_w(P[lo], ['hips', 'spine', 'chest', 'neck'], 2, 0.08)
+    for j, n in enumerate(['hips', 'spine', 'chest', 'neck']):
+        W[lo, col[n]] += tw[:, j]
+W /= np.maximum(W.sum(1, keepdims=True), 1e-9)
+# 1) cape: below z ~0.5 the cape is a separate sheet (air gap to the body) -> flood fill from its hem;
+#    above that it is fused with the shoulders: a thin band behind the back that fades to the chest
+from collections import deque
+nbr = [[] for _ in range(nv)]
+for e in body.data.edges:
+    a, b = e.vertices
+    nbr[a].append(b); nbr[b].append(a)
+seen = np.zeros(nv, bool)
+q = deque(np.nonzero((Y > 0.12) & (Z < 0.3))[0].tolist())
+seen[list(q)] = True
+while q:
+    i = q.popleft()
+    for j in nbr[i]:
+        if not seen[j] and Z[j] < 0.5:
+            seen[j] = True; q.append(j)
+assert seen.sum() < nv * 0.25 and Y[seen].min() > 0.04, 'cape flood fill leaked into the body'
+seen |= (Y > 0.1) & (Z < 0.5)                      # stray islands of the cape sheet
+top = sstep((Z - 0.49) / 0.02) * (Z < 0.56) * sstep((Y - 0.055) / 0.025) * (np.abs(X) < 0.2)
+c_cape = np.maximum(seen.astype(float), top) * sstep((CAPE_TOP - 0.005 - Z) / 0.07)
+for _ in range(3):                                   # relax along edges: no hard weight steps inside the sheet
+    c_cape = 0.5 * c_cape + 0.5 * np.array([c_cape[n].mean() if n else c_cape[i] for i, n in enumerate(nbr)])
+limbs = [col[n] for n in BODY_BONES if n.split('.')[0] in ('thigh', 'shin', 'foot', 'upper_arm', 'forearm', 'hand')]
+cm = c_cape > 0.001
+# body share of cape verts: no limb influence (legs must not drag the cape) -> hips / spine / chest
+Wb = W[cm].copy()
+Wb[:, limbs] = 0
+Wb[:, len(BODY_BONES):] = 0
+trunk = dist_w(P[cm], ['hips', 'spine', 'chest'], 2, 0.08)
+for j, n in enumerate(['hips', 'spine', 'chest']):
+    Wb[:, col[n]] += trunk[:, j] * (Wb.sum(1) < 0.2)
+Wb /= np.maximum(Wb.sum(1, keepdims=True), 1e-9)
+Wc = np.zeros_like(Wb)
+cw = dist_w(P[cm], CAPE_BONES, 3, 0.07)
+for j, n in enumerate(CAPE_BONES):
+    Wc[:, col[n]] = cw[:, j]
+cc = c_cape[cm][:, None]
+W[cm] = Wb * (1 - cc) + Wc * cc
+# 2) head + hood rigid (blend over the cowl)
+h = sstep((Z - 0.595) / 0.05)
+h[(Z > 0.56) & (np.abs(X) > 0.19)] = 0                 # shoulders never follow the head
+W *= (1 - h)[:, None]
+W[:, col['head']] += h
+# 3) clean: drop < 0.02, max 4 influences, normalise
+W[W < 0.02] = 0
+o = np.argsort(-W, 1)
+keep = np.zeros_like(W, bool); np.put_along_axis(keep, o[:, :4], True, 1)
+W = np.where(keep, W, 0); W /= np.maximum(W.sum(1, keepdims=True), 1e-9)
+for g in list(body.vertex_groups):
+    body.vertex_groups.remove(g)
+groups = {n: body.vertex_groups.new(name=n) for n in names}
+for n in names:
+    j = col[n]; idx = np.nonzero(W[:, j] > 0)[0]
+    for i in idx:
+        groups[n].add([int(i)], float(W[i, j]), 'REPLACE')
+CAPE_MASK = c_cape > 0.5
+print('[ninja] cape verts %d, head-rigid verts %d' % (CAPE_MASK.sum(), (h > 0.99).sum()))
+
+# ----------------------------------------------------------------------------------------------
+# optional accessories (from the previous build): re-seated in the new right hand, 100 % hand.R
+# ----------------------------------------------------------------------------------------------
+ACC = {}
+if os.path.exists(ACC_BLEND):
+    with bpy.data.libraries.load(ACC_BLEND, link=False) as (src, dst):
+        dst.meshes = [m for m in src.meshes if m in ('Acc_Dagger', 'Acc_HandProp')]
+        dst.armatures = [a for a in src.armatures if a == 'Ninja_Rig']
+    old_arm = [a for a in bpy.data.armatures if a is not arm][0]
+    Mo = old_arm.bones['hand.R'].matrix_local
+    Mn = arm.bones['hand.R'].matrix_local
+    T = Mn @ Matrix.Diagonal((1.15, 1.15, 1.15, 1.0)) @ Mo.inverted()   # bigger glove -> 15 % bigger props
+    for me in dst.meshes:
+        me.transform(T)
+        ob = bpy.data.objects.new(me.name, me)
+        coll.objects.link(ob)
+        g = ob.vertex_groups.new(name='hand.R'); g.add(list(range(len(me.vertices))), 1.0, 'REPLACE')
+        ob.parent = rig
+        m = ob.modifiers.new('Armature', 'ARMATURE'); m.object = rig
+        ob['optional_accessory'] = 'dagger' if 'Dagger' in me.name else 'handprop'
+        ob.hide_render = True
+        ob.hide_set(True)
+        ACC[me.name] = ob
+    bpy.data.armatures.remove(old_arm)
+else:
+    print('[ninja] WARNING: no accessory source', ACC_BLEND)
+
+# ----------------------------------------------------------------------------------------------
+# animation: the previous build's poses (rotations in armature axes, deg) carried over to this rig
+# ----------------------------------------------------------------------------------------------
+def mirror_name(n):
+    return n[:-2] + '.R' if n.endswith('.L') else n[:-2] + '.L' if n.endswith('.R') else n
+def mirror_pose(p):
+    out = {}
+    for n, v in p.items():
+        if n.startswith('cape_'):
+            k = n[5]; mk = {'L': 'R', 'R': 'L', 'C': 'C'}[k]
+            out['cape_' + mk + n[6:]] = (v[0], -v[1], -v[2])
+        elif n == 'lift':
+            out[n] = v
+        else:
+            out[mirror_name(n)] = (v[0], -v[1], -v[2])
+    return out
+def merge(*ps):
+    out = {}
+    for p in ps:
+        out.update(p)
+    return out
+def cape(a, b, c, sway=0.0, side=0.0):
+    """a/b/c: swing back per bone level (deg); sway: twist; side: the edges flare outward (symmetric cape)"""
+    out = {}
+    for k, w in (('C', 0.0), ('L', 1.0), ('R', -1.0)):
+        out['cape_%s1' % k] = (a * (1 - 0.15 * abs(w)), -w * side * 0.35, sway * (1 + 0.5 * w))
+        out['cape_%s2' % k] = (b, -w * side * 0.45, sway * 0.5)
+        out['cape_%s3' % k] = (c, -w * side * 0.35, sway * 0.3)
+    return out
+
+STAND = merge({'upper_arm.L': (0, 34, 0), 'upper_arm.R': (0, -34, 0), 'forearm.L': (-18, 0, 0), 'forearm.R': (-18, 0, 0),
+               'thigh.L': (-8, -5, 0), 'thigh.R': (-8, 5, 0), 'shin.L': (15, 5, 0), 'shin.R': (15, -5, 0),
+               'foot.L': (-7, 0, 0), 'foot.R': (-7, 0, 0), 'spine': (4, 0, 0), 'head': (-4, 0, 0)}, cape(4, 2, 2))
+IDLE_B = merge(STAND, {'chest': (-2, 0, 0), 'upper_arm.L': (0, 37, 0), 'upper_arm.R': (0, -37, 0), 'head': (-6, 0, 0),
+                       'thigh.L': (-11, -5, 0), 'thigh.R': (-11, 5, 0), 'shin.L': (20, 5, 0), 'shin.R': (20, -5, 0),
+                       'foot.L': (-9, 0, 0), 'foot.R': (-9, 0, 0)}, cape(7, 4, 4, 2, 3))
+RUN_BODY = {'spine': (14, 0, 0), 'chest': (8, 0, -6), 'hips': (0, 0, 6), 'head': (-20, 0, 6),
+            'upper_arm.L': (68, 26, 0), 'upper_arm.R': (62, -26, 0), 'forearm.L': (12, 0, 0), 'forearm.R': (12, 0, 0)}
+RUN_C = merge(RUN_BODY, {'thigh.L': (-48, 0, 0), 'shin.L': (22, 0, 0), 'foot.L': (-6, 0, 0),
+                         'thigh.R': (32, 0, 0), 'shin.R': (58, 0, 0), 'foot.R': (22, 0, 0)}, cape(26, 14, 10, 4, 16))
+RUN_P = merge(RUN_BODY, {'hips': (0, 0, 0), 'chest': (8, 0, 0), 'head': (-20, 0, 0),
+                         'thigh.L': (-6, 0, 0), 'shin.L': (14, 0, 0), 'foot.L': (-8, 0, 0),
+                         'thigh.R': (-38, 0, 0), 'shin.R': (104, 0, 0), 'foot.R': (12, 0, 0), 'lift': 0.022}, cape(32, 16, 12, 0, 20))
+CROUCH = {'thigh.L': (-58, -4, 0), 'thigh.R': (-58, 4, 0), 'shin.L': (88, 0, 0), 'shin.R': (88, 0, 0), 'foot.L': (-30, 0, 0),
+          'foot.R': (-30, 0, 0), 'spine': (26, 0, 0), 'chest': (6, 0, 0), 'head': (-26, 0, 0),
+          'upper_arm.L': (55, 26, 0), 'upper_arm.R': (55, -26, 0), 'forearm.L': (10, 0, 0), 'forearm.R': (10, 0, 0)}
+JUMP_UP = merge({'thigh.L': (-12, 0, 0), 'thigh.R': (-6, 0, 0), 'shin.L': (14, 0, 0), 'shin.R': (10, 0, 0), 'foot.L': (32, 0, 0),
+                 'foot.R': (32, 0, 0), 'spine': (-4, 0, 0), 'head': (-6, 0, 0),
+                 'upper_arm.L': (-140, 12, 0), 'upper_arm.R': (-140, -12, 0), 'forearm.L': (-12, 0, 0), 'forearm.R': (-12, 0, 0)}, cape(14, 6, 4, 0, 6))
+JUMP_TUCK = merge({'thigh.L': (-72, -6, 0), 'thigh.R': (-34, 6, 0), 'shin.L': (104, 0, 0), 'shin.R': (64, 0, 0), 'foot.L': (12, 0, 0),
+                   'foot.R': (22, 0, 0), 'spine': (10, 0, 0), 'head': (-12, 0, 0),
+                   'upper_arm.L': (-40, -22, 0), 'upper_arm.R': (-40, 22, 0), 'forearm.L': (-30, 0, 0), 'forearm.R': (-30, 0, 0)}, cape(36, 14, 10, 0, 14))
+FALL_A = merge({'thigh.L': (-36, -6, 0), 'thigh.R': (-10, 6, 0), 'shin.L': (52, 0, 0), 'shin.R': (28, 0, 0), 'foot.L': (20, 0, 0),
+                'foot.R': (24, 0, 0), 'spine': (-5, 0, 0), 'head': (-10, 0, 0),
+                'upper_arm.L': (-28, -55, 0), 'upper_arm.R': (-28, 55, 0), 'forearm.L': (-22, 0, 0), 'forearm.R': (-22, 0, 0)}, cape(50, 20, 14, -4, 14))
+FALL_B = merge(FALL_A, {'thigh.L': (-26, -6, 0), 'thigh.R': (-20, 6, 0), 'shin.L': (40, 0, 0), 'shin.R': (40, 0, 0),
+                        'upper_arm.L': (-32, -63, 0), 'upper_arm.R': (-32, 63, 0)}, cape(58, 24, 18, 4, 18))
+LAND_IMPACT = merge(CROUCH, {'thigh.L': (-66, -6, 0), 'thigh.R': (-66, 6, 0), 'shin.L': (102, 0, 0), 'shin.R': (102, 0, 0),
+                             'foot.L': (-36, 0, 0), 'foot.R': (-36, 0, 0), 'spine': (30, 0, 0), 'upper_arm.L': (42, 30, 0),
+                             'upper_arm.R': (42, -30, 0)}, cape(24, 6, 6))
+LAND_MID = merge(CROUCH, {'thigh.L': (-44, -4, 0), 'thigh.R': (-44, 4, 0), 'shin.L': (70, 0, 0), 'shin.R': (70, 0, 0),
+                          'foot.L': (-25, 0, 0), 'foot.R': (-25, 0, 0), 'spine': (20, 0, 0)}, cape(32, 8, 8, 0, 8))
+LAND_END = merge(RUN_BODY, {'hips': (0, 0, 0), 'chest': (8, 0, 0), 'head': (-20, 0, 0), 'thigh.L': (-14, -3, 0), 'thigh.R': (-10, 3, 0),
+                            'shin.L': (24, 0, 0), 'shin.R': (20, 0, 0), 'foot.L': (-10, 0, 0), 'foot.R': (-10, 0, 0)}, cape(28, 10, 8, 0, 12))
+SLIDE_A = merge({'thigh.L': (-86, -4, 0), 'shin.L': (6, 0, 0), 'foot.L': (24, 0, 0),
+                 'thigh.R': (-34, 10, 0), 'shin.R': (122, 0, 0), 'foot.R': (22, 0, 0),
+                 'spine': (-20, 0, 0), 'chest': (-6, 0, 0), 'head': (16, 0, 0),
+                 'upper_arm.L': (-36, -28, 0), 'upper_arm.R': (40, 12, 0), 'forearm.L': (-24, 0, 0), 'forearm.R': (-10, 0, 0)}, cape(52, 14, 10, 3, 14))
+SLIDE_B = merge(SLIDE_A, {'spine': (-23, 0, 0), 'head': (18, 0, 0), 'upper_arm.L': (-40, -32, 0)}, cape(58, 18, 14, -3, 18))
+
+ACTIONS = [
+    ('Idle', [(0, STAND), (24, IDLE_B), (48, STAND)]),
+    ('Run', [(0, RUN_C), (4, RUN_P), (8, mirror_pose(RUN_C)), (12, mirror_pose(RUN_P)), (16, RUN_C)]),
+    ('Jump', [(0, STAND), (4, CROUCH), (8, JUMP_UP), (14, JUMP_TUCK), (18, merge(JUMP_TUCK, cape(40, 16, 12, 0, 14)))]),
+    ('Fall', [(0, FALL_A), (12, FALL_B), (24, FALL_A)]),
+    ('Land', [(0, merge(FALL_A, {'thigh.L': (-15, -6, 0), 'thigh.R': (-12, 6, 0), 'shin.L': (16, 0, 0), 'shin.R': (14, 0, 0)})),
+              (3, LAND_IMPACT), (9, LAND_MID), (20, LAND_END)]),
+    ('Slide', [(0, SLIDE_A), (8, SLIDE_B), (16, SLIDE_A)]),
+]
+
+PB = rig.pose.bones
+for pb in PB:
+    pb.rotation_mode = 'QUATERNION'
+# Delta: rest-direction change old rig -> this rig per limb bone (arms also lifted by ARM_LIFT);
+# a pose rotation R (old rig) becomes  D_parent . R . D_self^-1  so every limb ends up pointing where it did.
+DELTA = {}
+for n, od in OLD_DIR.items():
+    if n.split('.')[0] in ('upper_arm', 'forearm', 'hand'):
+        s = 1 if n.endswith('.L') else -1
+        od = Matrix.Rotation(-s * ARM_LIFT, 3, 'Y') @ od     # +Y lowers the left arm -> -Y lifts it
+    b = arm.bones[n]
+    nd = (b.tail_local - b.head_local).normalized()
+    DELTA[n] = od.rotation_difference(nd).to_matrix()
+I3 = Matrix.Identity(3)
+def pose_rot(name, deg):
+    R = Euler([math.radians(a) for a in deg], 'XYZ').to_matrix() if deg is not None else I3.copy()
+    b = arm.bones[name]
+    Dp = DELTA.get(b.parent.name, I3) if b.parent else I3
+    Ds = DELTA.get(name, I3)
+    return Dp @ R @ Ds.inverted()
+def to_local(name, R):
+    M = arm.bones[name].matrix_local.to_3x3()
+    return (M.inverted() @ R @ M).to_quaternion()
+GROUND_IDX = np.nonzero(~CAPE_MASK & (Z < 0.45))[0]
+def lowest_z():
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = body.evaluated_get(dg)
+    me = ev.to_mesh()
+    c = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get('co', c)
+    ev.to_mesh_clear()
+    return float(c.reshape(-1, 3)[GROUND_IDX, 2].min())
+def apply_pose(pose):
+    for pb in PB:
+        pb.rotation_quaternion = (1, 0, 0, 0); pb.location = (0, 0, 0)
+    for pb in PB:
+        n = pb.name
+        if n in pose or n in DELTA or (pb.parent and pb.parent.name in DELTA):
+            pb.rotation_quaternion = to_local(n, pose_rot(n, pose.get(n)))
+    bpy.context.view_layer.update()
+    dz = -lowest_z() + pose.get('lift', 0.0)
+    Mh = arm.bones['hips'].matrix_local.to_3x3()
+    PB['hips'].location = Mh.inverted() @ Vector((0, 0, dz))
+    bpy.context.view_layer.update()
+
+rig.animation_data_create()
+for name, keys in ACTIONS:
+    act = bpy.data.actions.new(name)
+    act.use_fake_user = True
+    rig.animation_data.action = act
+    prev = {}
+    for f, pose in keys:
+        apply_pose(pose)
+        for pb in PB:
+            q = pb.rotation_quaternion.copy()
+            if pb.name in prev and prev[pb.name].dot(q) < 0:
+                q.negate(); pb.rotation_quaternion = q
+            prev[pb.name] = q
+            pb.keyframe_insert('rotation_quaternion', frame=f, group=pb.name)
+        PB['hips'].keyframe_insert('location', frame=f, group='hips')
+    act.use_frame_range = True
+    act.frame_start, act.frame_end = 0, keys[-1][0]
+    act.use_cyclic = name in ('Idle', 'Run', 'Fall', 'Slide')
+    tr = rig.animation_data.nla_tracks.new(); tr.name = name
+    tr.strips.new(name, 0, act); tr.mute = True
+    print('[ninja] action %-6s frames 0-%d  (%.2fs)' % (name, keys[-1][0], keys[-1][0] / FPS))
+rig.animation_data.action = bpy.data.actions['Idle']
+scene.frame_start, scene.frame_end = 0, 48
+scene.frame_set(0)
+
+# ----------------------------------------------------------------------------------------------
+# report + save + export
+# ----------------------------------------------------------------------------------------------
+for ob in [body] + list(ACC.values()):
+    print('[ninja] %-14s verts %6d tris %6d' % (ob.name, len(ob.data.vertices), sum(len(p.vertices) - 2 for p in ob.data.polygons)))
+for im in bpy.data.images:
+    print('[ninja] texture %-20s %dx%d' % (im.name, im.size[0], im.size[1]))
+bpy.ops.file.pack_all()
+bpy.context.preferences.filepaths.save_version = 0
+os.makedirs(os.path.dirname(OUT_BLEND), exist_ok=True)
+bpy.ops.wm.save_as_mainfile(filepath=OUT_BLEND, compress=True)
+print('[ninja] saved', OUT_BLEND)
+
+os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
+for ob in bpy.data.objects:
+    ob.hide_set(False)
+kw = dict(filepath=OUT_GLB, export_format='GLB', use_selection=False, use_visible=False, export_extras=True,
+          export_yup=True, export_apply=False, export_animations=True, export_animation_mode='ACTIONS',
+          export_force_sampling=True, export_frame_range=False, export_anim_slide_to_zero=True, export_skins=True,
+          export_def_bones=False, export_all_influences=False, export_materials='EXPORT', export_image_format='WEBP',
+          export_image_quality=90, export_morph=False, export_reset_pose_bones=True)
+while True:
+    try:
+        bpy.ops.export_scene.gltf(**kw); break
+    except TypeError as e:
+        bad = [k for k in kw if ('"%s"' % k) in str(e)]
+        if not bad:
+            raise
+        print('[ninja] exporter: dropping unknown option', bad)
+        for k in bad:
+            kw.pop(k)
+for ob in ACC.values():
+    ob.hide_set(True)
+
+# the exporter writes alphaMode BLEND for an alpha-linked base colour: the cape holes are a cutout -> MASK
+with open(OUT_GLB, 'rb') as f:
+    data = f.read()
+jl = struct.unpack_from('<I', data, 12)[0]
+js = json.loads(data[20:20 + jl])
+for m in js.get('materials', []):
+    if m.get('name') == 'Ninja_Fal':
+        m['alphaMode'] = 'MASK'; m['alphaCutoff'] = 0.5; m['doubleSided'] = True
+jb = json.dumps(js, separators=(',', ':')).encode()
+jb += b' ' * ((4 - len(jb) % 4) % 4)
+rest = data[20 + jl:]
+out = struct.pack('<III', 0x46546C67, 2, 12 + 8 + len(jb) + len(rest)) + struct.pack('<II', len(jb), 0x4E4F534A) + jb + rest
+with open(OUT_GLB, 'wb') as f:
+    f.write(out)
+print('[ninja] exported', OUT_GLB, os.path.getsize(OUT_GLB), 'bytes')

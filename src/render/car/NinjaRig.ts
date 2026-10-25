@@ -5,7 +5,7 @@ import { clamp } from '../../core/math.ts';
 import { assetBytes } from './glbParse.ts';
 import ninjaUrl from '../../assets/models/ninja.glb';
 
-/** the six in-place clips baked by assets-src/ninja/build_ninja.py */
+/** the six in-place clips baked by assets-src/ninja/build_ninja_v3.py (same clips as build_ninja.py) */
 export type NinjaClip = 'Idle' | 'Run' | 'Jump' | 'Fall' | 'Land' | 'Slide';
 
 /** what the game state asks for this frame (pure, so it can be checked without WebGL) */

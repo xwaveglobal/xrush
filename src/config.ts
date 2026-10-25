@@ -313,16 +313,16 @@ export const RENDER = {
   car: (typeof location !== 'undefined' && /[?&]car=sprite/.test(location.search) ? 'sprite' : 'mesh') as 'mesh' | 'sprite',
   /**
    * player look (visual only): 'ninja' = the chibi ninja character (src/assets/models/ninja.glb, built by
-   * assets-src/ninja/build_ninja.py, driven by render/car/NinjaRig.ts); 'car' = the XWAVE X1 exactly as
+   * assets-src/ninja/build_ninja_v3.py, driven by render/car/NinjaRig.ts); 'car' = the XWAVE X1 exactly as
    * before. Revert to the car: set this to 'car' (or `?player=car` in the page URL).
    */
   player: (typeof location !== 'undefined' && /[?&]player=car/.test(location.search) ? 'car' : 'ninja') as 'ninja' | 'car',
   /** ninja: model (≈1.02 m) → game size; optional accessory (never both); clip timing */
   ninja: {
-    scale: 2.2,
+    scale: 2.6,
     /** the ninja's own materials only: albedo × bright and environment light, so the dark cloth reads on the night road */
-    bright: 1.45,
-    env: 1.6,
+    bright: 1.15,
+    env: 1.2,
     accessory: ((typeof location !== 'undefined' && /[?&]ninjaacc=(dagger|handprop)/.exec(location.search)?.[1]) || 'none') as 'none' | 'dagger' | 'handprop',
     /** Run plays at speed / runRate (clamped 0.85…1.9 ×) */
     runRate: 30,
