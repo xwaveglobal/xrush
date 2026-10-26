@@ -61,6 +61,8 @@ for o in bpy.data.objects:
     if o.name.startswith('Acc_'):
         show = (acc == 'dagger' and 'Dagger' in o.name) or (acc == 'handprop' and 'HandProp' in o.name)
         o.hide_render = not show; o.hide_set(not show)
+if '--nocape' in argv and 'Ninja_Cape' in bpy.data.objects:
+    bpy.data.objects['Ninja_Cape'].hide_render = True
 pose = arg('--pose', 'Idle:0').split(':')
 if '--noground' in argv:
     g.hide_render = True

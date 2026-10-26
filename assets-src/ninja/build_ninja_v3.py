@@ -5,10 +5,12 @@
 #   blender -b --factory-startup -P assets-src/ninja/build_ninja_v3.py -- --blend out.blend --glb out.glb
 #
 # Inputs (assets-src/ninja/fal_v3/):  ninja_v2_textured.glb  textured ~30k tri mesh (glTF, faces +X)
-#                                     basecolor_v6.webp      albedo (v6: near-black hood, baked AO + fold crease shading, faint
-#                                                            weave; scripts/v6_tex.py from basecolor_v4; v5 kept; --basecolor)
-#                                     normal_v6.webp         normal map: hood fold creases + fabric weave baked (--normal)
+#                                     basecolor_v7.webp      albedo (v7: v6 + charcoal scarf/mantle, body crease + AO shading,
+#                                                            stitches; scripts/v7_tex.py from basecolor_v6; --basecolor)
+#                                     normal_v7.webp         normal map: hood folds + weave (v6) + body creases (--normal)
+#                                     cape_basecolor_v7.webp / cape_normal_v7.webp   the v7 cape (scripts/v7_cape_tex.py)
 #                                     hood_folds.py          the hood fold field shared by this build and v6_tex.py
+#                                     cape_v7.py, body_folds.py   v7 cape geometry/weights, body crease field
 #                                     emit_v3.png            eye-white emission mask
 # v4: hood_sculpt() (soft dome, no back ridge, tip falling back; --no-sculpt to skip), procedural cape
 # keys (cape_keys: hangs down / trails back, side chains pulled in, travelling wave + flutter), extra
@@ -22,6 +24,9 @@
 # re-smoothed with 3x the passes, folds from fal_v3/hood_folds.py (long folds from the tip down the back and
 # sides, pleats/sags where it bunches into the scarf) are low-passed on the mesh and pressed in, folded-over or
 # pinched faces are relaxed, and the scan's custom normals are reset to smooth on the hood (--no-subdiv to skip).
+# v7: the scanned cape sheet is removed and replaced by Ninja_Cape (own skinned mesh, two layers, torn hem + holes,
+# double-sided alpha-cutout material), kept clear of the coat and of the road (per-frame extra lift); body cloth
+# creases from fal_v3/body_folds.py pressed in; body budget 30,000 tris (+ cape ~2.5k).
 # Reused from the previous build (git: build_ninja.py): bone names, the six pose sets, cape helper,
 # in-place baking, the optional accessories (appended from --acc-blend, default: old NinjaCharacter.blend
 # saved as fal_v3/accessories.blend).
@@ -32,6 +37,8 @@ import bpy, bmesh, math, os, sys, json, struct
 import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fal_v3'))
 import hood_folds
+import cape_v7
+import body_folds
 from mathutils import Vector, Matrix, Euler, Quaternion
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -98,6 +105,26 @@ for f in [f for f in bm.faces if f not in old_faces]:
         if src:
             lp[uvl].uv = src[0][uvl].uv
 print('[ninja] closed %d small scan cracks around the hood (%d tris)' % (len(small), len([f for f in bm.faces if f not in old_faces])))
+# v7: the scanned cape sheet (below the shoulder mantle, an air gap away from the coat) is removed: a purpose-built
+# two-layer cape (fal_v3/cape_v7.py) replaces it. Flood fill from its hem over vertices below z 0.5 (+ stray islands)
+if '--scan-cape' not in argv:
+    bm.verts.ensure_lookup_table()
+    from collections import deque as _dq
+    _seed = [v for v in bm.verts if v.co.y > 0.12 and v.co.z < 0.3]
+    _cs = set(_seed); _q = _dq(_seed)
+    while _q:
+        _v = _q.popleft()
+        for _e in _v.link_edges:
+            _o = _e.other_vert(_v)
+            if _o not in _cs and _o.co.z < 0.5:
+                _cs.add(_o); _q.append(_o)
+    _cs |= set(v for v in bm.verts if v.co.y > 0.1 and v.co.z < 0.5)
+    assert len(_cs) < len(bm.verts) * 0.2 and min(v.co.y for v in _cs) > 0.04, 'cape flood fill leaked into the body'
+    _df = [f for f in bm.faces if all(v in _cs for v in f.verts)]
+    bmesh.ops.delete(bm, geom=_df, context='FACES')
+    _lo = [v for v in bm.verts if not v.link_faces]
+    bmesh.ops.delete(bm, geom=_lo, context='VERTS')
+    print('[ninja] v7: scanned cape sheet removed (%d faces, %d verts)' % (len(_df), len(_cs)))
 # v6: the hood shell of the scan has 14-25 mm triangles, too coarse to hold cloth folds: split its long edges
 # once (UVs interpolated by bmesh), and give the tris back by a light collapse-decimate of the body below the
 # shoulders (legs, torso under the cape), so the body stays ~30k tris
@@ -129,7 +156,7 @@ if '--no-subdiv' not in argv:
     _vg = body.vertex_groups.new(name='_dec')
     _lo = [v.index for v in body.data.vertices if v.co.z < 0.52 and v.co.y < 0.02]   # front / legs / boots, never the cape sheet
     _vg.add(_lo, 1.0, 'REPLACE')
-    _target = int(_arg('--tri-budget', '30500'))
+    _target = int(_arg('--tri-budget', '30000'))
     _ratio = _target / _ntri                       # the modifier ratio is for the whole mesh; the group limits where
     _md = body.modifiers.new('dec', 'DECIMATE'); _md.decimate_type = 'COLLAPSE'; _md.ratio = max(0.5, min(1.0, _ratio))
     _md.vertex_group = '_dec'; _md.vertex_group_factor = 1.0; _md.use_collapse_triangulate = True
@@ -283,7 +310,7 @@ mat = body.data.materials[0]; mat.name = 'Ninja_Fal'
 nt = mat.node_tree; N = nt.nodes; Lk = nt.links
 bsdf = [n for n in N if n.type == 'BSDF_PRINCIPLED'][0]
 bc_node = bsdf.inputs['Base Color'].links[0].from_node
-img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v6.webp')))
+img = bpy.data.images.load(os.path.join(SRC, _arg('--basecolor', 'basecolor_v7.webp')))
 img.name = 'ninja_basecolor'; img.alpha_mode = 'STRAIGHT'
 old = bc_node.image
 bc_node.image = img
@@ -292,7 +319,7 @@ if old and old.users == 0:
 if not bsdf.inputs['Alpha'].is_linked:
     Lk.new(bc_node.outputs['Alpha'], bsdf.inputs['Alpha'])
 em = N.new('ShaderNodeTexImage'); em.image = bpy.data.images.load(os.path.join(SRC, _arg('--emit-tex', 'emit_v3.png'))); em.image.name = 'ninja_emit'
-NRM = _arg('--normal', 'normal_v6.webp')
+NRM = _arg('--normal', 'normal_v7.webp')
 if NRM != '-':
     for n_ in N:
         if n_.type == 'TEX_IMAGE' and n_.image and 'normal' in n_.image.name.lower():
@@ -431,43 +458,45 @@ if lo.any():
     for j, n in enumerate(['hips', 'spine', 'chest', 'neck']):
         W[lo, col[n]] += tw[:, j]
 W /= np.maximum(W.sum(1, keepdims=True), 1e-9)
-# 1) cape: below z ~0.5 the cape is a separate sheet (air gap to the body) -> flood fill from its hem;
-#    above that it is fused with the shoulders: a thin band behind the back that fades to the chest
-from collections import deque
-nbr = [[] for _ in range(nv)]
-for e in body.data.edges:
-    a, b = e.vertices
-    nbr[a].append(b); nbr[b].append(a)
-seen = np.zeros(nv, bool)
-q = deque(np.nonzero((Y > 0.12) & (Z < 0.3))[0].tolist())
-seen[list(q)] = True
-while q:
-    i = q.popleft()
-    for j in nbr[i]:
-        if not seen[j] and Z[j] < 0.5:
-            seen[j] = True; q.append(j)
-assert seen.sum() < nv * 0.25 and Y[seen].min() > 0.04, 'cape flood fill leaked into the body'
-seen |= (Y > 0.1) & (Z < 0.5)                      # stray islands of the cape sheet
-top = sstep((Z - 0.49) / 0.02) * (Z < 0.56) * sstep((Y - 0.055) / 0.025) * (np.abs(X) < 0.2)
-c_cape = np.maximum(seen.astype(float), top) * sstep((CAPE_TOP - 0.005 - Z) / 0.07)
-for _ in range(3):                                   # relax along edges: no hard weight steps inside the sheet
-    c_cape = 0.5 * c_cape + 0.5 * np.array([c_cape[n].mean() if n else c_cape[i] for i, n in enumerate(nbr)])
-limbs = [col[n] for n in BODY_BONES if n.split('.')[0] in ('thigh', 'shin', 'foot', 'upper_arm', 'forearm', 'hand')]
-cm = c_cape > 0.001
-# body share of cape verts: no limb influence (legs must not drag the cape) -> hips / spine / chest
-Wb = W[cm].copy()
-Wb[:, limbs] = 0
-Wb[:, len(BODY_BONES):] = 0
-trunk = dist_w(P[cm], ['hips', 'spine', 'chest'], 2, 0.08)
-for j, n in enumerate(['hips', 'spine', 'chest']):
-    Wb[:, col[n]] += trunk[:, j] * (Wb.sum(1) < 0.2)
-Wb /= np.maximum(Wb.sum(1, keepdims=True), 1e-9)
-Wc = np.zeros_like(Wb)
-cw = dist_w(P[cm], CAPE_BONES, 3, 0.07)
-for j, n in enumerate(CAPE_BONES):
-    Wc[:, col[n]] = cw[:, j]
-cc = c_cape[cm][:, None]
-W[cm] = Wb * (1 - cc) + Wc * cc
+# 1) v7: no cape weights on the body any more (the scanned sheet is removed; the new cape is its own mesh,
+#    weighted in build_cape()); with --scan-cape the old flood-fill weighting is used
+c_cape = np.zeros(nv)
+if '--scan-cape' in argv:
+    from collections import deque
+    nbr = [[] for _ in range(nv)]
+    for e in body.data.edges:
+        a, b = e.vertices
+        nbr[a].append(b); nbr[b].append(a)
+    seen = np.zeros(nv, bool)
+    q = deque(np.nonzero((Y > 0.12) & (Z < 0.3))[0].tolist())
+    seen[list(q)] = True
+    while q:
+        i = q.popleft()
+        for j in nbr[i]:
+            if not seen[j] and Z[j] < 0.5:
+                seen[j] = True; q.append(j)
+    assert seen.sum() < nv * 0.25 and Y[seen].min() > 0.04, 'cape flood fill leaked into the body'
+    seen |= (Y > 0.1) & (Z < 0.5)                      # stray islands of the cape sheet
+    top = sstep((Z - 0.49) / 0.02) * (Z < 0.56) * sstep((Y - 0.055) / 0.025) * (np.abs(X) < 0.2)
+    c_cape = np.maximum(seen.astype(float), top) * sstep((CAPE_TOP - 0.005 - Z) / 0.07)
+    for _ in range(3):                                   # relax along edges: no hard weight steps inside the sheet
+        c_cape = 0.5 * c_cape + 0.5 * np.array([c_cape[n].mean() if n else c_cape[i] for i, n in enumerate(nbr)])
+    limbs = [col[n] for n in BODY_BONES if n.split('.')[0] in ('thigh', 'shin', 'foot', 'upper_arm', 'forearm', 'hand')]
+    cm = c_cape > 0.001
+    # body share of cape verts: no limb influence (legs must not drag the cape) -> hips / spine / chest
+    Wb = W[cm].copy()
+    Wb[:, limbs] = 0
+    Wb[:, len(BODY_BONES):] = 0
+    trunk = dist_w(P[cm], ['hips', 'spine', 'chest'], 2, 0.08)
+    for j, n in enumerate(['hips', 'spine', 'chest']):
+        Wb[:, col[n]] += trunk[:, j] * (Wb.sum(1) < 0.2)
+    Wb /= np.maximum(Wb.sum(1, keepdims=True), 1e-9)
+    Wc = np.zeros_like(Wb)
+    cw = dist_w(P[cm], CAPE_BONES, 3, 0.07)
+    for j, n in enumerate(CAPE_BONES):
+        Wc[:, col[n]] = cw[:, j]
+    cc = c_cape[cm][:, None]
+    W[cm] = Wb * (1 - cc) + Wc * cc
 # 2) head + hood rigid (blend over the cowl)
 h = sstep((Z - 0.595) / 0.05)
 h[(Z > 0.56) & (Z < 0.66) & (np.abs(X) > 0.19)] = 0     # shoulders never follow the head (the hood sides above do)
@@ -517,6 +546,108 @@ for n in names:
         groups[n].add([int(i)], float(W[i, j]), 'REPLACE')
 CAPE_MASK = c_cape > 0.5
 print('[ninja] cape verts %d, head-rigid verts %d' % (CAPE_MASK.sum(), (h > 0.99).sum()))
+
+# v7 body cloth detail (fal_v3/body_folds.py, shared with the texture bake): sleeve / trouser / scarf / boot
+# creases pressed in along the normal (<= ~3 mm); the rigid head + hood are left alone
+if '--no-body-folds' not in argv:
+    _Wd = {n: W[:, col[n]] for n in BODY_BONES}
+    _BF = body_folds.features(P, _Wd, SEG)
+    _bh = 1.7 * body_folds.field(_BF) * (1 - h)          # x1.7: the decimated body needs bolder folds to show
+    VN_ = np.array([v.normal[:] for v in body.data.vertices])
+    _newP = P - _bh[:, None] * VN_
+    body.data.vertices.foreach_set('co', _newP.astype(np.float32).ravel()); body.data.update()
+    print('[ninja] body folds: max %.1f mm, verts > 0.5 mm: %d' % (_bh.max() * 1000, (_bh > 0.0005).sum()))
+
+# ----------------------------------------------------------------------------------------------
+# v7 cape: its own mesh (fal_v3/cape_v7.py): outer layer + a shorter inner layer, torn hem (per-column length),
+# real holes, broad folds fanning out from the gathered top; pushed clear of the coat; skinned to the three cape
+# chains (top edge pinned to the chest); own material (cape_basecolor_v7 RGBA cutout + cape_normal_v7), double sided
+# ----------------------------------------------------------------------------------------------
+from mathutils.bvhtree import BVHTree
+def build_cape():
+    _bp = [v.co.copy() for v in body.data.vertices]
+    body_bvh = BVHTree.FromPolygons(_bp, [tuple(p_.vertices) for p_ in body.data.polygons])
+    layers = {}
+    for layer in ('inner', 'outer'):
+        Pc, Qc, uvc, UVc, Nc = cape_v7.build(layer)
+        # clearance from the coat (and for the outer layer, from the inner layer): push out along the sheet normal
+        gap = 0.009 if layer == 'inner' else 0.006
+        bv = body_bvh if layer == 'inner' else BVHTree.FromPolygons([Vector(p_) for p_ in layers['inner'][0]] + _bp,
+                                                                       [tuple(q_) for q_ in layers['inner'][1]] +
+                                                                       [tuple(int(i_) + len(layers['inner'][0]) for i_ in p_.vertices) for p_ in body.data.polygons])
+        moved = 0
+        for _ in range(4):
+            push = np.zeros(len(Pc))
+            for i_, p_ in enumerate(Pc):
+                if UVc[i_, 1] < 0.06:       # the top rows stay tucked inside the shoulder mantle (hidden)
+                    continue
+                loc, nrm, _fi, dist = bv.find_nearest(Vector(p_), 0.05)
+                if loc is None:
+                    continue
+                d_ = (Vector(p_) - loc).dot(nrm)            # signed distance off the nearest surface
+                if d_ < gap:
+                    push[i_] = gap - d_
+            if not (push > 1e-5).any():
+                break
+            moved = max(moved, int((push > 1e-5).sum()))
+            Pc = Pc + push[:, None] * Nc
+        layers[layer] = (Pc, Qc, uvc, UVc, Nc)
+        print('[ninja] cape %s: %d verts, %d tris, pushed clear %d verts' % (layer, len(Pc), 2 * len(Qc), moved))
+    verts, faces, uvs, wts = [], [], [], {}
+    for layer in ('outer', 'inner'):
+        Pc, Qc, uvc, UVc, Nc = layers[layer]
+        o = len(verts)
+        verts += [tuple(p_) for p_ in Pc]; uvs += [tuple(t_) for t_ in uvc]
+        faces += [tuple(int(i_) + o for i_ in q_) for q_ in Qc]
+        for bn, w_ in cape_v7.weights(UVc, layer).items():
+            wts.setdefault(bn, []).extend(list(w_))
+    me = bpy.data.meshes.new('Ninja_Cape'); me.from_pydata(verts, [], faces); me.update()
+    used = np.zeros(len(verts), bool); used[np.array(faces).ravel()] = True
+    uvl_ = me.uv_layers.new(name='UVMap')
+    for lp in me.loops:
+        uvl_.data[lp.index].uv = uvs[lp.vertex_index]
+    for p_ in me.polygons:
+        p_.use_smooth = True
+    ob = bpy.data.objects.new('Ninja_Cape', me); coll.objects.link(ob)
+    # loose verts (grid points of the removed hole quads)
+    bm_ = bmesh.new(); bm_.from_mesh(me)
+    keep_idx = [v.index for v in bm_.verts if v.link_faces]
+    bmesh.ops.delete(bm_, geom=[v for v in bm_.verts if not v.link_faces], context='VERTS')
+    bm_.to_mesh(me); bm_.free()
+    Wm = {bn: np.array(w_)[keep_idx] for bn, w_ in wts.items()}
+    # max 4 influences, normalised
+    bn_ = list(Wm); A_ = np.stack([Wm[b] for b in bn_], 1); A_[A_ < 0.02] = 0
+    o_ = np.argsort(-A_, 1); kp = np.zeros_like(A_, bool); np.put_along_axis(kp, o_[:, :4], True, 1)
+    A_ = np.where(kp, A_, 0); A_ /= np.maximum(A_.sum(1, keepdims=True), 1e-9)
+    for j, b in enumerate(bn_):
+        g = ob.vertex_groups.new(name=b)
+        for i_ in np.nonzero(A_[:, j] > 0)[0]:
+            g.add([int(i_)], float(A_[i_, j]), 'REPLACE')
+    ob.parent = rig
+    md = ob.modifiers.new('Armature', 'ARMATURE'); md.object = rig
+    # material
+    cm = bpy.data.materials.new('Ninja_Cape'); cm.use_nodes = True
+    nt_ = cm.node_tree; bs = nt_.nodes['Principled BSDF']
+    tb = nt_.nodes.new('ShaderNodeTexImage'); tb.image = bpy.data.images.load(os.path.join(SRC, _arg('--cape-basecolor', 'cape_basecolor_v7.webp')))
+    tb.image.name = 'cape_basecolor'; tb.image.alpha_mode = 'STRAIGHT'
+    nt_.links.new(tb.outputs['Color'], bs.inputs['Base Color']); nt_.links.new(tb.outputs['Alpha'], bs.inputs['Alpha'])
+    tn = nt_.nodes.new('ShaderNodeTexImage'); tn.image = bpy.data.images.load(os.path.join(SRC, _arg('--cape-normal', 'cape_normal_v7.webp')))
+    tn.image.name = 'cape_normal'; tn.image.colorspace_settings.name = 'Non-Color'
+    nm_ = nt_.nodes.new('ShaderNodeNormalMap'); nt_.links.new(tn.outputs['Color'], nm_.inputs['Color']); nt_.links.new(nm_.outputs['Normal'], bs.inputs['Normal'])
+    bs.inputs['Roughness'].default_value = 0.9; bs.inputs['Metallic'].default_value = 0.0
+    try:
+        bs.inputs['Specular IOR Level'].default_value = 0.35
+    except KeyError:
+        pass
+    try:
+        cm.blend_method = 'CLIP'; cm.alpha_threshold = 0.5
+    except Exception:
+        pass
+    cm.use_backface_culling = False
+    me.materials.append(cm)
+    print('[ninja] Ninja_Cape: verts %d, tris %d' % (len(me.vertices), sum(len(p_.vertices) - 2 for p_ in me.polygons)))
+    return ob
+CAPE_OB = None if '--scan-cape' in argv else build_cape()
 
 # ----------------------------------------------------------------------------------------------
 # optional accessories (from the previous build): re-seated in the new right hand, 100 % hand.R
@@ -632,14 +763,14 @@ CAPE_MOTION = {   # lift: total trail-back angle (deg) over frame keys; wave / f
     'Run':   dict(lift=[(0, 30), (16, 30)], wave=4.0, flut=2.5, k=1, kf=2, sway=3.0),
     'Jump':  dict(lift=[(0, 5), (4, 3), (8, 22), (14, 38), (18, 42)], wave=3.0, flut=2.5, k=1, kf=2),
     'Fall':  dict(lift=[(0, 50), (12, 54), (24, 50)], wave=5.0, flut=3.5, k=1, kf=3),
-    'Land':  dict(lift=[(0, 50), (3, 40), (9, 14), (14, 1), (20, 7)], wave=2.5, flut=1.5, k=1, kf=2, decay=True),
+    'Land':  dict(lift=[(0, 50), (2, 44), (6, 20), (10, 5), (14, -2), (20, 3)], wave=2.5, flut=1.5, k=1, kf=2, decay=True),
     'Slide': dict(lift=[(0, 84), (8, 90), (16, 84)], wave=4.0, flut=3.0, k=1, kf=2),
 }
 CAPE_SPLIT = (0.46, 0.32, 0.22)       # share of the lift per level (top..hem)
 CAPE_IN = 0.45                        # side chains: inward swing per degree of their lift
-def cape_keys(act, f, T):
+def cape_keys(act, f, T, extra=0.0):
     m = CAPE_MOTION[act]
-    lift = _lerp_keys(m['lift'], f)
+    lift = _lerp_keys(m['lift'], f) + extra
     ph = 2 * math.pi * f / max(T, 1)
     amp = (1 - 0.7 * f / max(T, 1)) if m.get('decay') else 1.0
     out = {}
@@ -689,6 +820,15 @@ def to_local(name, R):
     M = arm.bones[name].matrix_local.to_3x3()
     return (M.inverted() @ R @ M).to_quaternion()
 GROUND_IDX = np.nonzero(~CAPE_MASK & (Z < 0.45))[0]
+CAPE_CLEAR = 0.012
+def cape_min_z():
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = CAPE_OB.evaluated_get(dg)
+    me = ev.to_mesh()
+    c = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get('co', c)
+    ev.to_mesh_clear()
+    return float(c.reshape(-1, 3)[:, 2].min())
 def lowest_z():
     dg = bpy.context.evaluated_depsgraph_get()
     ev = body.evaluated_get(dg)
@@ -727,14 +867,38 @@ for name, keys in ACTIONS:
         PB['hips'].keyframe_insert('location', frame=f, group='hips')
     # v4: the cape bones get their own keys every 2 frames (overriding the pose-set values above)
     T = keys[-1][0]
-    for f in range(0, T + 1, 2):
-        for n_, e_ in cape_keys(name, f, T).items():
+    def key_cape(f, extra=0.0):
+        for n_, e_ in cape_keys(name, f, T, extra).items():
             q = to_local(n_, Euler([math.radians(a) for a in e_], 'XYZ').to_matrix())
             if n_ in prev and prev[n_].dot(q) < 0:
                 q.negate()
             prev[n_] = q
             PB[n_].rotation_quaternion = q
             PB[n_].keyframe_insert('rotation_quaternion', frame=f, group=n_)
+    for f in range(0, T + 1, 2):
+        key_cape(f)
+    # v7: the cape never goes into the road: frames whose cape dips below CAPE_CLEAR get extra lift (smallest that
+    # clears, either way), spread to the neighbouring keys so it does not pop
+    if CAPE_OB is not None:
+        ext = {}
+        for f in range(0, T + 1, 2):
+            scene.frame_set(f)
+            if cape_min_z() >= CAPE_CLEAR:
+                continue
+            for e_ in [d * sg for d in range(4, 64, 4) for sg in (1, -1)]:
+                key_cape(f, e_); scene.frame_set(f)
+                if cape_min_z() >= CAPE_CLEAR:
+                    ext[f] = e_; break
+            key_cape(f)
+        if ext:
+            fr = list(range(0, T + 1, 2))
+            sm = {}
+            for f in fr:
+                near = [ext[g] for g in fr if g in ext and (abs(g - f) <= 4 or (act.name in ('Idle', 'Run', 'Fall', 'Slide') and abs(abs(g - f) - T) <= 4))]
+                sm[f] = (max(near, key=abs) if near else 0.0) * (1.0 if f in ext else 0.6)
+            for f in fr:
+                key_cape(f, sm[f])
+            print('[ninja] %s: cape lifted off the road at %d keys (max %+d deg)' % (name, len(ext), max(ext.values(), key=abs)))
     act.use_frame_range = True
     act.frame_start, act.frame_end = 0, keys[-1][0]
     act.use_cyclic = name in ('Idle', 'Run', 'Fall', 'Slide')
@@ -748,7 +912,7 @@ scene.frame_set(0)
 # ----------------------------------------------------------------------------------------------
 # report + save + export
 # ----------------------------------------------------------------------------------------------
-for ob in [body] + list(ACC.values()):
+for ob in [body] + ([CAPE_OB] if CAPE_OB else []) + list(ACC.values()):
     print('[ninja] %-14s verts %6d tris %6d' % (ob.name, len(ob.data.vertices), sum(len(p.vertices) - 2 for p in ob.data.polygons)))
 for im in bpy.data.images:
     print('[ninja] texture %-20s %dx%d' % (im.name, im.size[0], im.size[1]))
@@ -785,7 +949,7 @@ with open(OUT_GLB, 'rb') as f:
 jl = struct.unpack_from('<I', data, 12)[0]
 js = json.loads(data[20:20 + jl])
 for m in js.get('materials', []):
-    if m.get('name') == 'Ninja_Fal':
+    if m.get('name') in ('Ninja_Fal', 'Ninja_Cape'):
         m['alphaMode'] = 'MASK'; m['alphaCutoff'] = 0.5; m['doubleSided'] = True
 jb = json.dumps(js, separators=(',', ':')).encode()
 jb += b' ' * ((4 - len(jb) % 4) % 4)

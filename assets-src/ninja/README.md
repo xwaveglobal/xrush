@@ -84,6 +84,33 @@ Size: 30,036 tris body (+39 from the closed cracks), GLB ≈ 2.2 MB.
   `normal_v6.webp` (build defaults).
 Size: 30,500 tris body (lower front body ≈ 18 % decimated to pay for the hood), GLB ≈ 2.25 MB.
 
+### v7 cape rebuild + body cloth detail (no extra fal spend)
+- **Hand prop / dagger** — unchanged rule, now tested (`tests/ninja.test.ts`): both are tagged `optional_accessory`
+  and hidden; `?ninjaacc=handprop` (or `dagger`) shows exactly that one. The default character is the empty-handed ninja.
+- **Cape** — the scanned cape sheet is cut off the body (flood fill from the hem, `--scan-cape` keeps the old v6
+  behaviour) and replaced by `Ninja_Cape`, its own skinned mesh built from `fal_v3/cape_v7.py`: an outer layer
+  (35×27 grid) + a shorter, darker inner layer (25×19) a few mm closer to the body, one material / one draw call,
+  ≈2.5k tris. Torn hem = every column has its own length (irregular 2–4 column tongues + a few deep rips), holes are
+  real geometry (quads inside the ellipse removed, the ring snapped onto it) with a bigger ragged alpha rim. Broad folds
+  fan out from the gathered top. The top rows sit inside the shoulder mantle (hidden); the rest is pushed ≥ 6–9 mm clear
+  of the coat (BVH). Weights: three columns (C, L, R) × three levels on the cape chains, top pinned to the chest,
+  ≤ 4 influences. Material `Ninja_Cape`: `cape_basecolor_v7.webp` (1024², near-black warm cloth, brownish worn edges,
+  alpha cutout) + `cape_normal_v7.webp` (folds + weave), roughness 0.9, exported **MASK + doubleSided** (the inside of
+  the cape is the same dark cloth, no light backfaces). Textures: `python fal_v3/scripts/v7_cape_tex.py OUTDIR`.
+- **Cape vs road** — after the procedural cape keys of each clip, every keyed frame is checked (evaluated cape mesh);
+  if the cape dips below 12 mm it gets the smallest extra lift that clears it, spread to the neighbouring keys.
+  Min cape height per clip (all frames): Slide 15.7 mm (v6: −22.6 mm), Idle 152, Jump 148, Fall 228, Land 204, Run 242 mm.
+  Land settles faster (lift 50° → 20° by frame 6).
+- **Body folds** — `fal_v3/body_folds.py` (shared by build and texture bake), in bone-local cylinder coordinates:
+  inner-elbow crescents, cuff bunching, upper-sleeve diagonals, knee-pit / knee-front creases, thigh diagonals, trouser
+  bunching into the boots, ankle wrinkles, wrap creases round the scarf. The build presses them in (×1.7, max ≈ 5.5 mm;
+  `--no-body-folds` to skip); the bake puts the narrow version in the normal map.
+- **Texture** — `blender -b NinjaCharacter.blend -P fal_v3/scripts/dump_v7.py -- dump.npz` (mesh, whole-body 40-ray AO,
+  weights, bones), then `python fal_v3/scripts/v7_tex.py dump.npz fal_v3/basecolor_v6.webp fal_v3/normal_v6.webp OUTDIR`:
+  scarf / neck wrap / mantle recoloured to the hood charcoal (leather + metal kept), crease + mild AO shading on the
+  body, small leather-edge bevel + stitch dashes → `basecolor_v7.webp`, `normal_v7.webp` (build defaults).
+Size: body 30,000 + cape ≈2,500 tris (≤ 33k), GLB ≈ 2.47 MB.
+
 ## Procedural build (v1, fallback)
 
 Chibi ninja that replaces the XWAVE X1's look in the game (`RENDER.player` in `src/config.ts`;
